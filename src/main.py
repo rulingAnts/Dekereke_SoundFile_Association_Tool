@@ -195,6 +195,77 @@ class DekeRekeAPI:
             self.settings_manager.settings['suffix_mappings'] = mappings
             self.settings_manager.save()
     
+    def load_dekereke_settings(self) -> Dict[str, Any]:
+        """
+        Load field-to-suffix mappings from Dekereke user settings XML file
+        
+        Returns:
+            {
+                'success': bool,
+                'mappings': dict of suffix -> [field_names],
+                'error': str (if failure)
+            }
+        """
+        try:
+            # Open file dialog
+            result = webview.windows[0].create_file_dialog(
+                webview.OPEN_DIALOG,
+                allow_multiple=False,
+                file_types=('XML Files (*.xml)',)
+            )
+            
+            if not result or len(result) == 0:
+                return {'success': False, 'error': 'No file selected'}
+            
+            settings_path = result[0]
+            
+            # Parse the XML file (UTF-16 encoding)
+            tree = ET.parse(settings_path)
+            root = tree.getroot()
+            
+            # Find column_to_sound_file_suffix_mappings section
+            mappings_elem = root.find('column_to_sound_file_suffix_mappings')
+            if mappings_elem is None:
+                return {'success': False, 'error': 'No suffix mappings found in settings file'}
+            
+            # Parse mappings (format: "ColumnName\tsuffix")
+            # We need to invert: suffix -> [column_names]
+            suffix_to_fields = {}
+            
+            for mapping_elem in mappings_elem.findall('column_to_sound_file_suffix_mapping'):
+                mapping_text = mapping_elem.text
+                if mapping_text and '\t' in mapping_text:
+                    parts = mapping_text.split('\t')
+                    if len(parts) == 2:
+                        field_name = parts[0].strip()
+                        suffix = parts[1].strip()
+                        
+                        # Add to our inverted mapping
+                        if suffix not in suffix_to_fields:
+                            suffix_to_fields[suffix] = []
+                        if field_name not in suffix_to_fields[suffix]:
+                            suffix_to_fields[suffix].append(field_name)
+            
+            if not suffix_to_fields:
+                return {'success': False, 'error': 'No valid mappings found in settings file'}
+            
+            # Save to our state
+            self.suffix_mappings = suffix_to_fields
+            if self.settings_manager:
+                self.settings_manager.settings['suffix_mappings'] = suffix_to_fields
+                self.settings_manager.save()
+            
+            return {
+                'success': True,
+                'mappings': suffix_to_fields,
+                'count': len(suffix_to_fields)
+            }
+            
+        except ET.ParseError as e:
+            return {'success': False, 'error': f'XML parsing error: {str(e)}'}
+        except Exception as e:
+            return {'success': False, 'error': f'Error loading settings: {str(e)}'}
+    
     def save_conditional_rules(self, rules: Dict[str, Any]):
         """
         Save conditional expectation rules

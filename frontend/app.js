@@ -56,6 +56,7 @@ function setupEventListeners() {
     });
 
     // Step 1
+    document.getElementById('btn-load-dekereke-settings').addEventListener('click', loadDekeRekeSettings);
     document.getElementById('btn-save-mappings').addEventListener('click', saveMappings);
     document.getElementById('btn-proceed-to-step2').addEventListener('click', () => showScreen('step2'));
 
@@ -382,6 +383,39 @@ function removeMapping(suffix, field) {
     // Remove tiles from both sides
     const tiles = document.querySelectorAll(`[data-suffix="${suffix}"][data-field="${field}"]`);
     tiles.forEach(tile => tile.remove());
+}
+
+// Load mappings from Dekereke settings file
+async function loadDekeRekeSettings() {
+    showLoading('Loading Dekereke settings...');
+    
+    try {
+        const result = await window.pywebview.api.load_dekereke_settings();
+        
+        if (result.success) {
+            // Clear existing mappings
+            state.suffixMappings = result.mappings;
+            
+            // Rebuild UI to show loaded mappings
+            buildMappingUI();
+            
+            // Add the mapping tiles
+            for (const suffix in result.mappings) {
+                const fields = result.mappings[suffix];
+                for (const field of fields) {
+                    addMappingTile(suffix, field);
+                }
+            }
+            
+            showSuccess(`Loaded ${result.count} suffix mappings from Dekereke settings`);
+        } else {
+            showError(result.error || 'Failed to load settings');
+        }
+    } catch (error) {
+        showError('Error loading settings: ' + error.message);
+    } finally {
+        hideLoading();
+    }
 }
 
 // Save mappings
