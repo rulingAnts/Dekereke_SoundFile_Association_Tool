@@ -38,7 +38,7 @@ class AudioFolderScanner:
             print(f"Error scanning audio folder: {e}")
             return False
     
-    def extract_suffixes(self, base_filenames: List[str]) -> Dict[str, List[str]]:
+    def extract_suffixes(self, base_filenames: List[str]) -> Tuple[Dict[str, List[str]], List[Dict]]:
         """
         Extract suffixes from audio files based on base filenames
         
@@ -46,7 +46,9 @@ class AudioFolderScanner:
             base_filenames: List of base filenames from <SoundFile> elements
         
         Returns:
-            Dictionary mapping suffix -> list of audio files with that suffix
+            Tuple of (suffix dictionary, ambiguous cases list)
+            - suffix dictionary: mapping suffix -> list of audio files with that suffix
+            - ambiguous cases: list of dicts with ambiguous interpretations
         """
         self.suffixes = {}
         ambiguous_cases = []
@@ -64,8 +66,9 @@ class AudioFolderScanner:
                 matches.sort(key=lambda x: len(x), reverse=True)
                 best_match = matches[0]
                 
-                # Record as ambiguous if there are other interpretations
-                if len(matches[0]) != len(matches[1]):
+                # Record as ambiguous if there are other interpretations with different lengths
+                # Check that we have at least 2 matches and their lengths differ
+                if len(matches) >= 2 and len(matches[0]) != len(matches[1]):
                     ambiguous_cases.append({
                         'file': audio_file,
                         'chosen_base': best_match,
