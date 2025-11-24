@@ -34,11 +34,25 @@ A comprehensive Python-based desktop application for linguists working with the 
 
 3. **Run the application:**
    ```bash
+   python start.py
+   ```
+   
+   Or directly:
+   ```bash
    cd src
    python main.py
    ```
 
 ## Usage
+
+### Quick Start
+
+Run the application:
+```bash
+python start.py
+```
+
+The startup script will check your Python version and dependencies before launching.
 
 ### Initial Setup
 
@@ -102,6 +116,22 @@ Settings are saved per-project in a file named `<xml_filename>_soundfile_config.
 **XML parsing fails**: Ensure your XML file is UTF-16 encoded and has the correct structure with `<phon_data>` root element.
 
 **Permission errors**: Ensure you have write permissions for the audio folder.
+
+## Testing
+
+Run the test suite to verify the installation:
+
+```bash
+python run_tests.py
+```
+
+Or run an example demonstration:
+
+```bash
+python example_usage.py
+```
+
+This will create sample data and demonstrate the complete workflow.
 
 ## License
 
