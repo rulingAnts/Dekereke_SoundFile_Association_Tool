@@ -1,0 +1,214 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Dekereke Sound File Association Tool</title>
+    <link rel="stylesheet" href="style.css">
+</head>
+<body>
+    <div id="app">
+        <!-- Header -->
+        <header>
+            <h1>Dekereke Sound File Association Tool</h1>
+            <div id="status-bar">
+                <span id="xml-status">No XML loaded</span>
+                <span id="audio-status">No audio folder selected</span>
+                <span id="record-count"></span>
+            </div>
+        </header>
+
+        <!-- Main Navigation -->
+        <nav id="main-nav">
+            <button id="nav-setup" class="nav-btn active" data-step="setup">Initial Setup</button>
+            <button id="nav-step1" class="nav-btn" data-step="step1" disabled>Step 1: Mapping</button>
+            <button id="nav-step2" class="nav-btn" data-step="step2" disabled>Step 2: Conditions</button>
+            <button id="nav-step3" class="nav-btn" data-step="step3" disabled>Step 3: Matching</button>
+            <button id="nav-review" class="nav-btn" data-step="review" disabled>Review & Execute</button>
+        </nav>
+
+        <!-- Main Content Area -->
+        <main id="main-content">
+            <!-- Initial Setup Screen -->
+            <section id="setup-screen" class="screen active">
+                <h2>Initial Setup</h2>
+                
+                <div class="setup-section">
+                    <h3>1. Select XML File</h3>
+                    <button id="btn-select-xml" class="btn-primary">Select XML File</button>
+                    <div id="xml-info" class="info-box hidden">
+                        <p><strong>File:</strong> <span id="xml-path"></span></p>
+                        <p><strong>Records:</strong> <span id="xml-record-count"></span></p>
+                    </div>
+                </div>
+
+                <div class="setup-section">
+                    <h3>2. Select Audio Folder</h3>
+                    <button id="btn-select-audio" class="btn-primary">Select Audio Folder</button>
+                    <div id="audio-info" class="info-box hidden">
+                        <p><strong>Folder:</strong> <span id="audio-path"></span></p>
+                        <p><strong>Files:</strong> <span id="audio-file-count"></span></p>
+                    </div>
+                </div>
+
+                <div class="setup-section">
+                    <h3>3. Case Sensitivity</h3>
+                    <p>Is your file system case-sensitive?</p>
+                    <p class="help-text">Most Windows and macOS systems are case-insensitive (file.wav = FILE.WAV). Linux is typically case-sensitive.</p>
+                    <label>
+                        <input type="radio" name="case-sensitive" value="false" checked> Case-insensitive (Windows/macOS default)
+                    </label>
+                    <label>
+                        <input type="radio" name="case-sensitive" value="true"> Case-sensitive (Linux default)
+                    </label>
+                </div>
+
+                <div id="duplicate-warning" class="warning-box hidden">
+                    <h3>⚠️ Duplicate Reference Numbers Found</h3>
+                    <p>The following Reference numbers appear multiple times:</p>
+                    <div id="duplicate-list"></div>
+                    <button id="btn-fix-duplicates" class="btn-warning">Fix Duplicates Now</button>
+                    <button id="btn-skip-duplicates" class="btn-secondary">Continue Anyway</button>
+                </div>
+
+                <div id="empty-soundfile-warning" class="warning-box hidden">
+                    <h3>⚠️ Empty SoundFile Elements Found</h3>
+                    <p>Some records have empty &lt;SoundFile&gt; elements. These need to be filled before proceeding.</p>
+                    <div id="empty-soundfile-list"></div>
+                    <button id="btn-fill-soundfiles" class="btn-warning">Fill SoundFile Elements</button>
+                    <button id="btn-skip-empty" class="btn-secondary">Skip These Records</button>
+                </div>
+
+                <div class="setup-section">
+                    <button id="btn-proceed-to-step1" class="btn-primary btn-large" disabled>Proceed to Step 1</button>
+                </div>
+            </section>
+
+            <!-- Step 1: Field-to-Suffix Mapping -->
+            <section id="step1-screen" class="screen">
+                <h2>Step 1: Field-to-Suffix Mapping</h2>
+                <p>Map audio file suffixes to database fields. Drag suffixes from the left to fields on the right.</p>
+                
+                <div id="ambiguous-warning" class="warning-box hidden">
+                    <h3>⚠️ Ambiguous Suffix Interpretations</h3>
+                    <p>Some files could match multiple base filenames:</p>
+                    <div id="ambiguous-list"></div>
+                    <button id="btn-confirm-ambiguous" class="btn-primary">Confirm Interpretations</button>
+                </div>
+
+                <div class="mapping-container">
+                    <div class="mapping-column">
+                        <h3>Suffixes Found</h3>
+                        <div id="suffix-list" class="draggable-list"></div>
+                    </div>
+                    <div class="mapping-column">
+                        <h3>Database Fields</h3>
+                        <div id="field-list" class="droppable-list"></div>
+                    </div>
+                </div>
+
+                <div class="button-row">
+                    <button id="btn-save-mappings" class="btn-primary">Save Mappings</button>
+                    <button id="btn-proceed-to-step2" class="btn-primary" disabled>Proceed to Step 2</button>
+                </div>
+            </section>
+
+            <!-- Step 2: Conditional Expectations -->
+            <section id="step2-screen" class="screen">
+                <h2>Step 2: Conditional Expectations</h2>
+                <p>Define when recordings are expected for each field.</p>
+                
+                <div class="global-setting">
+                    <h3>Global Setting</h3>
+                    <label>
+                        <input type="checkbox" id="include-empty-fields" checked>
+                        Expect recordings even for empty fields
+                    </label>
+                    <p class="help-text">Users often record before transcribing, so empty fields may still have audio.</p>
+                </div>
+
+                <div id="conditions-container"></div>
+
+                <div class="button-row">
+                    <button id="btn-save-conditions" class="btn-primary">Save Conditions</button>
+                    <button id="btn-proceed-to-step3" class="btn-primary">Proceed to Step 3</button>
+                </div>
+            </section>
+
+            <!-- Step 3: Matching Interface -->
+            <section id="step3-screen" class="screen">
+                <h2>Step 3: Match Files to Records</h2>
+                
+                <!-- Step 3a: Suggested Matches -->
+                <div id="step3a-container">
+                    <h3>Suggested Matches</h3>
+                    <p>Review automatically suggested matches. Check the boxes for matches you want to accept.</p>
+                    <div id="suggested-matches-list"></div>
+                    <div class="button-row">
+                        <button id="btn-accept-suggestions" class="btn-primary">Accept Selected</button>
+                        <button id="btn-skip-to-manual" class="btn-secondary">Skip to Manual Matching</button>
+                    </div>
+                </div>
+
+                <!-- Step 3b: Manual Matching -->
+                <div id="step3b-container" class="hidden">
+                    <h3>Manual Matching</h3>
+                    <div class="matching-container">
+                        <div class="matching-pane">
+                            <h4>Missing Files (Expected but not found)</h4>
+                            <div id="missing-files-list" class="drop-zone"></div>
+                        </div>
+                        <div class="matching-pane">
+                            <h4>Orphaned Files (Found but not expected)</h4>
+                            <div id="orphaned-files-list" class="drag-zone"></div>
+                        </div>
+                    </div>
+                    <div class="button-row">
+                        <button id="btn-mark-orphaned" class="btn-secondary">Mark Selected as Orphaned</button>
+                        <button id="btn-mark-unrecorded" class="btn-secondary">Mark Selected as Unrecorded</button>
+                        <button id="btn-proceed-to-review" class="btn-primary">Proceed to Review</button>
+                    </div>
+                </div>
+            </section>
+
+            <!-- Review & Execute Screen -->
+            <section id="review-screen" class="screen">
+                <h2>Review Changes</h2>
+                <p>Review all queued operations before applying them.</p>
+                
+                <div id="queue-summary">
+                    <h3>Summary</h3>
+                    <p><strong>Renames:</strong> <span id="rename-count">0</span></p>
+                    <p><strong>Moves to Orphans:</strong> <span id="orphan-count">0</span></p>
+                    <p><strong>Unrecorded:</strong> <span id="unrecorded-count">0</span></p>
+                </div>
+
+                <div id="queue-details">
+                    <h3>Operations</h3>
+                    <div id="operations-list"></div>
+                </div>
+
+                <div class="button-row">
+                    <button id="btn-execute" class="btn-primary btn-large">Execute Operations</button>
+                    <button id="btn-back-to-step3" class="btn-secondary">Back to Step 3</button>
+                </div>
+            </section>
+        </main>
+
+        <!-- Modals -->
+        <div id="modal-overlay" class="modal-overlay hidden">
+            <div id="modal-content" class="modal-content">
+                <div id="modal-body"></div>
+            </div>
+        </div>
+
+        <!-- Loading Indicator -->
+        <div id="loading" class="loading-overlay hidden">
+            <div class="spinner"></div>
+            <p id="loading-text">Processing...</p>
+        </div>
+    </div>
+
+    <script src="app.js"></script>
+</body>
+</html>

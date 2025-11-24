@@ -1,0 +1,23 @@
+# Dekereke Sound File Association Tool
+# Python 3.8+ required
+
+# Desktop GUI framework
+pywebview>=4.0.0
+
+# XML processing
+lxml>=4.9.0
+
+# Audio playback (optional - app must work without it)
+pygame>=2.1.0
+
+# Fuzzy string matching
+python-Levenshtein>=0.20.0
+
+# JSON handling (built-in, but for reference)
+# json (standard library)
+
+# File operations
+# os, shutil (standard library)
+
+# UUID generation
+# uuid (standard library)

@@ -1,0 +1,399 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Dekereke Sound File Association Tool - Documentation</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+        
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+            line-height: 1.6;
+            color: #333;
+            background-color: #f5f5f5;
+        }
+        
+        header {
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+            padding: 3rem 2rem;
+            text-align: center;
+        }
+        
+        header h1 {
+            font-size: 2.5rem;
+            margin-bottom: 0.5rem;
+        }
+        
+        header p {
+            font-size: 1.2rem;
+            opacity: 0.9;
+        }
+        
+        nav {
+            background-color: white;
+            box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+            padding: 1rem 2rem;
+            position: sticky;
+            top: 0;
+            z-index: 100;
+        }
+        
+        nav ul {
+            list-style: none;
+            display: flex;
+            justify-content: center;
+            gap: 2rem;
+        }
+        
+        nav a {
+            color: #667eea;
+            text-decoration: none;
+            font-weight: 500;
+        }
+        
+        nav a:hover {
+            text-decoration: underline;
+        }
+        
+        .container {
+            max-width: 1200px;
+            margin: 0 auto;
+            padding: 2rem;
+        }
+        
+        section {
+            background-color: white;
+            border-radius: 8px;
+            padding: 2rem;
+            margin-bottom: 2rem;
+            box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+        }
+        
+        h2 {
+            color: #667eea;
+            margin-bottom: 1rem;
+            padding-bottom: 0.5rem;
+            border-bottom: 2px solid #667eea;
+        }
+        
+        h3 {
+            color: #764ba2;
+            margin-top: 1.5rem;
+            margin-bottom: 0.75rem;
+        }
+        
+        .feature-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
+            gap: 2rem;
+            margin-top: 2rem;
+        }
+        
+        .feature-card {
+            background-color: #f9fafb;
+            border: 1px solid #e5e7eb;
+            border-radius: 8px;
+            padding: 1.5rem;
+        }
+        
+        .feature-card h3 {
+            margin-top: 0;
+            color: #667eea;
+        }
+        
+        .download-section {
+            text-align: center;
+            padding: 3rem 2rem;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+            border-radius: 8px;
+        }
+        
+        .download-btn {
+            display: inline-block;
+            background-color: white;
+            color: #667eea;
+            padding: 1rem 2rem;
+            margin: 1rem 0.5rem;
+            border-radius: 8px;
+            text-decoration: none;
+            font-weight: bold;
+            transition: transform 0.2s;
+        }
+        
+        .download-btn:hover {
+            transform: translateY(-2px);
+        }
+        
+        .screenshot-placeholder {
+            background-color: #e5e7eb;
+            height: 400px;
+            border-radius: 8px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            color: #6b7280;
+            font-style: italic;
+            margin: 2rem 0;
+        }
+        
+        footer {
+            background-color: #1f2937;
+            color: white;
+            text-align: center;
+            padding: 2rem;
+            margin-top: 4rem;
+        }
+        
+        code {
+            background-color: #f3f4f6;
+            padding: 0.2rem 0.4rem;
+            border-radius: 4px;
+            font-family: 'Courier New', monospace;
+            font-size: 0.9em;
+        }
+        
+        .warning {
+            background-color: #fef3c7;
+            border-left: 4px solid #f59e0b;
+            padding: 1rem;
+            margin: 1rem 0;
+        }
+        
+        .info {
+            background-color: #dbeafe;
+            border-left: 4px solid #3b82f6;
+            padding: 1rem;
+            margin: 1rem 0;
+        }
+    </style>
+</head>
+<body>
+    <header>
+        <h1>Dekereke Sound File Association Tool</h1>
+        <p>Manage audio file associations with your Dekereke phonology database</p>
+    </header>
+
+    <nav>
+        <ul>
+            <li><a href="#overview">Overview</a></li>
+            <li><a href="#features">Features</a></li>
+            <li><a href="#installation">Installation</a></li>
+            <li><a href="#usage">Usage Guide</a></li>
+            <li><a href="#download">Download</a></li>
+        </ul>
+    </nav>
+
+    <div class="container">
+        <section id="overview">
+            <h2>Overview</h2>
+            <p>
+                The Dekereke Sound File Association Tool is a comprehensive desktop application designed 
+                specifically for linguists working with the Dekereke phonology database. It helps manage 
+                the complex relationships between audio recordings and database records, making it easy to:
+            </p>
+            <ul>
+                <li>Identify orphaned audio files that don't match any database record</li>
+                <li>Find missing recordings that should exist based on your database</li>
+                <li>Automatically match files using intelligent fuzzy matching algorithms</li>
+                <li>Safely rename and organize files with comprehensive logging</li>
+            </ul>
+            
+            <div class="info">
+                <strong>Perfect for:</strong> Linguistic fieldwork, language documentation projects, 
+                phonology research, and anyone managing large collections of audio recordings linked 
+                to structured linguistic data.
+            </div>
+        </section>
+
+        <section id="features">
+            <h2>Features</h2>
+            <div class="feature-grid">
+                <div class="feature-card">
+                    <h3>🎯 Intelligent Matching</h3>
+                    <p>Fuzzy matching algorithm suggests likely matches between orphaned files and missing recordings based on reference numbers, glosses, and filename similarity.</p>
+                </div>
+                
+                <div class="feature-card">
+                    <h3>🔒 Safe Operations</h3>
+                    <p>All file operations are queued and reviewed before execution. Prominent backup warnings ensure your data is protected.</p>
+                </div>
+                
+                <div class="feature-card">
+                    <h3>📝 Comprehensive Logging</h3>
+                    <p>Every file operation is logged in both human-readable Markdown and machine-readable JSON formats with complete history tracking.</p>
+                </div>
+                
+                <div class="feature-card">
+                    <h3>🗂️ Suffix Mapping</h3>
+                    <p>Flexible system for mapping file suffixes (like "-phon" or "-xbig") to database fields using an intuitive drag-and-drop interface.</p>
+                </div>
+                
+                <div class="feature-card">
+                    <h3>⚙️ Conditional Rules</h3>
+                    <p>Define when recordings are expected based on field values, preventing false "missing file" warnings.</p>
+                </div>
+                
+                <div class="feature-card">
+                    <h3>🌐 UTF-16 Support</h3>
+                    <p>Properly handles Dekereke's UTF-16 encoded XML files, preserving exact formatting and encoding.</p>
+                </div>
+            </div>
+        </section>
+
+        <section id="installation">
+            <h2>Installation</h2>
+            
+            <h3>Requirements</h3>
+            <ul>
+                <li>Python 3.8 or higher</li>
+                <li>macOS (primary) or Windows</li>
+                <li>Audio files in WAV format</li>
+            </ul>
+            
+            <h3>Quick Start</h3>
+            <ol>
+                <li>Download the latest release (see Download section below)</li>
+                <li>Extract the archive to your preferred location</li>
+                <li>Open a terminal and navigate to the extracted folder</li>
+                <li>Install dependencies: <code>pip install -r requirements.txt</code></li>
+                <li>Run the application: <code>cd src && python main.py</code></li>
+            </ol>
+            
+            <div class="warning">
+                <strong>Note:</strong> This application requires write permissions for the audio folder 
+                you're working with. Ensure you have appropriate permissions before starting.
+            </div>
+        </section>
+
+        <section id="usage">
+            <h2>Usage Guide</h2>
+            
+            <h3>Workflow Overview</h3>
+            <p>The tool follows a systematic workflow to ensure accurate and safe file operations:</p>
+            
+            <div class="screenshot-placeholder">
+                Screenshot: Initial Setup Screen
+            </div>
+            
+            <h3>1. Initial Setup</h3>
+            <ul>
+                <li><strong>Select XML File:</strong> Choose your Dekereke XML database file</li>
+                <li><strong>Select Audio Folder:</strong> Choose the folder containing your WAV files</li>
+                <li><strong>Case Sensitivity:</strong> Configure whether filename matching should be case-sensitive</li>
+                <li><strong>Handle Warnings:</strong> Address any duplicate Reference numbers or empty SoundFile elements</li>
+            </ul>
+            
+            <div class="screenshot-placeholder">
+                Screenshot: Field-to-Suffix Mapping Interface
+            </div>
+            
+            <h3>2. Step 1: Field-to-Suffix Mapping</h3>
+            <p>
+                Map audio file suffixes to database fields. For example, if your files use "-phon" 
+                for phonetic transcriptions, drag "-phon" from the left to the "Phonetic" field on the right.
+            </p>
+            
+            <div class="screenshot-placeholder">
+                Screenshot: Conditional Expectations Builder
+            </div>
+            
+            <h3>3. Step 2: Conditional Expectations</h3>
+            <p>
+                Define rules for when recordings are expected. For instance, you might only expect 
+                phonetic audio when the Phonetic field is non-empty, or only expect certain field 
+                recordings for specific categories.
+            </p>
+            
+            <div class="screenshot-placeholder">
+                Screenshot: Matching Interface
+            </div>
+            
+            <h3>4. Step 3: Matching</h3>
+            <p><strong>Step 3a - Suggested Matches:</strong></p>
+            <ul>
+                <li>Review automatically suggested matches with confidence scores</li>
+                <li>Check boxes next to matches you want to accept</li>
+                <li>High-confidence matches are pre-checked for your convenience</li>
+            </ul>
+            
+            <p><strong>Step 3b - Manual Matching:</strong></p>
+            <ul>
+                <li>View split-pane interface showing missing and orphaned files</li>
+                <li>Drag orphaned files to missing files to create matches</li>
+                <li>Mark files as permanently orphaned or intentionally unrecorded</li>
+            </ul>
+            
+            <div class="screenshot-placeholder">
+                Screenshot: Review & Execute Screen
+            </div>
+            
+            <h3>5. Review & Execute</h3>
+            <ul>
+                <li>Review all queued operations before applying them</li>
+                <li>Create a backup of your audio folder (strongly recommended)</li>
+                <li>Execute file operations with comprehensive logging</li>
+            </ul>
+            
+            <h3>Important Notes</h3>
+            <div class="warning">
+                <strong>Leading Zeros:</strong> The tool preserves leading zeros in Reference numbers. 
+                "0021" is treated as different from "21".
+            </div>
+            
+            <div class="info">
+                <strong>Settings Persistence:</strong> All settings are saved per-project. When you 
+                reopen the same XML file, your previous mappings and rules are automatically loaded.
+            </div>
+        </section>
+
+        <section id="download" class="download-section">
+            <h2>Download</h2>
+            <p>Get the latest version of Dekereke Sound File Association Tool</p>
+            <a href="#" class="download-btn">Download for macOS (Coming Soon)</a>
+            <a href="#" class="download-btn">Download for Windows (Coming Soon)</a>
+            <p style="margin-top: 2rem; opacity: 0.9;">
+                <strong>Current Version:</strong> 1.0.0-beta<br>
+                <strong>License:</strong> AGPL-3.0
+            </p>
+        </section>
+
+        <section id="support">
+            <h2>Support & Contributing</h2>
+            <p>
+                This is an open-source project released under the AGPL-3.0 license. 
+                We welcome bug reports, feature requests, and contributions.
+            </p>
+            
+            <h3>Getting Help</h3>
+            <ul>
+                <li>Check the README.md file included with the application</li>
+                <li>Review the CODING_AGENT_PROMPT.md for detailed technical specifications</li>
+                <li>Open an issue on GitHub for bug reports</li>
+            </ul>
+            
+            <h3>Contributing</h3>
+            <p>
+                If you'd like to contribute to the project, please review the source code on GitHub 
+                and submit pull requests with your improvements.
+            </p>
+        </section>
+    </div>
+
+    <footer>
+        <p><strong>Dekereke Sound File Association Tool</strong></p>
+        <p>Copyright © 2025 Seth Johnston</p>
+        <p>Licensed under AGPL-3.0 | Built with assistance from Claude Sonnet and GitHub Copilot</p>
+        <p style="margin-top: 1rem;">
+            <a href="https://github.com/rulingAnts/Dekereke_SoundFile_Association_Tool" 
+               style="color: #93c5fd; text-decoration: none;">View on GitHub</a>
+        </p>
+    </footer>
+</body>
+</html>
