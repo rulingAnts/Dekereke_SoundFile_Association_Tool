@@ -42,6 +42,10 @@ function setupEventListeners() {
     document.getElementById('btn-select-xml').addEventListener('click', selectXMLFile);
     document.getElementById('btn-select-audio').addEventListener('click', selectAudioFolder);
     document.getElementById('btn-proceed-to-step1').addEventListener('click', proceedToStep1);
+    document.getElementById('btn-fill-soundfiles').addEventListener('click', showFillSoundFilesModal);
+    document.getElementById('btn-skip-empty').addEventListener('click', skipEmptyRecords);
+    document.getElementById('btn-fix-duplicates').addEventListener('click', showFixDuplicatesModal);
+    document.getElementById('btn-skip-duplicates').addEventListener('click', skipDuplicates);
 
     // Case sensitivity
     document.querySelectorAll('input[name="case-sensitive"]').forEach(radio => {
@@ -219,13 +223,18 @@ function buildMappingUI() {
     // Add suffixes
     for (const suffix in state.suffixes) {
         const item = document.createElement('div');
-        item.className = 'draggable-item';
+        item.className = 'draggable-item droppable-item';
         item.draggable = true;
         item.dataset.suffix = suffix;
-        item.textContent = suffix || '(no suffix)';
+        
+        const label = document.createElement('strong');
+        label.textContent = suffix || '(no suffix)';
+        item.appendChild(label);
         
         item.addEventListener('dragstart', handleDragStart);
         item.addEventListener('dragend', handleDragEnd);
+        item.addEventListener('dragover', handleDragOver);
+        item.addEventListener('drop', handleDrop);
         
         suffixList.appendChild(item);
     }
@@ -234,10 +243,16 @@ function buildMappingUI() {
     const fields = ['Whole Record', ...state.fieldNames];
     for (const field of fields) {
         const item = document.createElement('div');
-        item.className = 'droppable-item';
+        item.className = 'draggable-item droppable-item';
+        item.draggable = true;
         item.dataset.field = field;
-        item.innerHTML = `<strong>${field}</strong>`;
         
+        const label = document.createElement('strong');
+        label.textContent = field;
+        item.appendChild(label);
+        
+        item.addEventListener('dragstart', handleDragStart);
+        item.addEventListener('dragend', handleDragEnd);
         item.addEventListener('dragover', handleDragOver);
         item.addEventListener('drop', handleDrop);
         
@@ -274,27 +289,99 @@ function handleDrop(e) {
     e.target.classList.remove('drag-over');
     
     if (draggedElement) {
-        const suffix = draggedElement.dataset.suffix;
-        const field = e.target.dataset.field || e.target.closest('.droppable-item').dataset.field;
+        const draggedSuffix = draggedElement.dataset.suffix;
+        const draggedField = draggedElement.dataset.field;
+        const target = e.target.classList.contains('droppable-item') ? e.target : e.target.closest('.droppable-item');
         
-        // Add mapping
+        if (!target) return false;
+        
+        const targetSuffix = target.dataset.suffix;
+        const targetField = target.dataset.field;
+        
+        let suffix, field;
+        
+        // Determine what was dragged and where it was dropped
+        if (draggedSuffix !== undefined && targetField !== undefined) {
+            // Suffix dragged onto field
+            suffix = draggedSuffix;
+            field = targetField;
+        } else if (draggedField !== undefined && targetSuffix !== undefined) {
+            // Field dragged onto suffix
+            suffix = targetSuffix;
+            field = draggedField;
+        } else {
+            // Invalid drop (suffix on suffix or field on field)
+            return false;
+        }
+        
+        // Check if this mapping already exists
+        if (state.suffixMappings[suffix] && state.suffixMappings[suffix].includes(field)) {
+            showError('This mapping already exists');
+            return false;
+        }
+        
+        // Add mapping to state
         if (!state.suffixMappings[suffix]) {
             state.suffixMappings[suffix] = [];
         }
-        if (!state.suffixMappings[suffix].includes(field)) {
-            state.suffixMappings[suffix].push(field);
-        }
+        state.suffixMappings[suffix].push(field);
         
-        // Update UI
-        const mappedSpan = document.createElement('span');
-        mappedSpan.className = 'mapped-suffix';
-        mappedSpan.textContent = suffix || '(no suffix)';
-        
-        const target = e.target.classList.contains('droppable-item') ? e.target : e.target.closest('.droppable-item');
-        target.appendChild(mappedSpan);
+        // Update UI on both sides
+        addMappingTile(suffix, field);
     }
     
     return false;
+}
+
+// Add mapping tile to both suffix and field
+function addMappingTile(suffix, field) {
+    // Find the suffix item
+    const suffixItem = document.querySelector(`[data-suffix="${suffix}"]`);
+    // Find the field item
+    const fieldItem = Array.from(document.querySelectorAll('[data-field]')).find(
+        el => el.dataset.field === field
+    );
+    
+    if (!suffixItem || !fieldItem) return;
+    
+    // Create tile for field (showing suffix)
+    const fieldTile = document.createElement('span');
+    fieldTile.className = 'mapped-tile';
+    fieldTile.dataset.suffix = suffix;
+    fieldTile.dataset.field = field;
+    fieldTile.textContent = suffix || '(no suffix)';
+    fieldTile.title = 'Click to remove';
+    fieldTile.addEventListener('click', function() {
+        removeMapping(suffix, field);
+    });
+    fieldItem.appendChild(fieldTile);
+    
+    // Create tile for suffix (showing field)
+    const suffixTile = document.createElement('span');
+    suffixTile.className = 'mapped-tile';
+    suffixTile.dataset.suffix = suffix;
+    suffixTile.dataset.field = field;
+    suffixTile.textContent = field;
+    suffixTile.title = 'Click to remove';
+    suffixTile.addEventListener('click', function() {
+        removeMapping(suffix, field);
+    });
+    suffixItem.appendChild(suffixTile);
+}
+
+// Remove mapping
+function removeMapping(suffix, field) {
+    // Remove from state
+    if (state.suffixMappings[suffix]) {
+        state.suffixMappings[suffix] = state.suffixMappings[suffix].filter(f => f !== field);
+        if (state.suffixMappings[suffix].length === 0) {
+            delete state.suffixMappings[suffix];
+        }
+    }
+    
+    // Remove tiles from both sides
+    const tiles = document.querySelectorAll(`[data-suffix="${suffix}"][data-field="${field}"]`);
+    tiles.forEach(tile => tile.remove());
 }
 
 // Save mappings
@@ -540,4 +627,259 @@ function showError(message) {
 
 function showSuccess(message) {
     alert(message);
+}
+
+// Handle empty SoundFile elements
+let emptyRecordsData = [];
+
+function showFillSoundFilesModal() {
+    const modal = document.getElementById('modal-overlay');
+    const modalBody = document.getElementById('modal-body');
+    
+    showLoading('Loading empty records...');
+    
+    // Get records with empty SoundFile elements
+    window.pywebview.api.get_empty_soundfile_records().then(records => {
+        hideLoading();
+        console.log('Received empty records:', records);
+        emptyRecordsData = records;
+        
+        if (!records || records.length === 0) {
+            modalBody.innerHTML = `
+                <h3>No Empty SoundFile Elements</h3>
+                <p>No records with empty SoundFile elements were found, or they couldn't be retrieved.</p>
+                <div class="button-row">
+                    <button onclick="closeModal()" class="btn-secondary">Close</button>
+                </div>
+            `;
+            modal.classList.remove('hidden');
+            return;
+        }
+        
+        modalBody.innerHTML = `
+            <h3>Fill Empty SoundFile Elements</h3>
+            <p>Choose how to fill ${records.length} empty SoundFile element(s):</p>
+            
+            <div style="margin: 20px 0;">
+                <h4>Auto-Generate Formula:</h4>
+                <div style="margin: 10px 0;">
+                    <label>Template:</label>
+                    <select id="soundfile-template" style="width: 100%; padding: 5px; margin: 5px 0;">
+                        <option value="{Reference}_{Gloss}.wav">Reference_Gloss.wav</option>
+                        <option value="{Reference}_{Phonetic}.wav">Reference_Phonetic.wav</option>
+                        <option value="{Reference}.wav">Reference.wav</option>
+                        <option value="custom">Custom...</option>
+                    </select>
+                </div>
+                <div id="custom-template-div" style="display: none; margin: 10px 0;">
+                    <label>Custom Template:</label>
+                    <input type="text" id="custom-template" 
+                           placeholder="Use {FieldName} for field values"
+                           style="width: 100%; padding: 5px;">
+                    <small>Available fields: ${Object.keys(records[0] || {}).filter(k => k !== 'index').join(', ')}</small>
+                </div>
+                <button onclick="previewSoundFileGeneration()" class="btn-secondary" style="margin: 10px 0;">Preview</button>
+                <div id="soundfile-preview" style="max-height: 200px; overflow-y: auto; margin: 10px 0;"></div>
+            </div>
+            
+            <div class="button-row">
+                <button onclick="applyAutoGeneration()" class="btn-primary">Apply Auto-Generation</button>
+                <button onclick="showManualEntry()" class="btn-secondary">Manual Entry</button>
+                <button onclick="closeModal()" class="btn-secondary">Cancel</button>
+            </div>
+        `;
+        
+        // Template change handler
+        document.getElementById('soundfile-template').addEventListener('change', function(e) {
+            const customDiv = document.getElementById('custom-template-div');
+            if (e.target.value === 'custom') {
+                customDiv.style.display = 'block';
+            } else {
+                customDiv.style.display = 'none';
+            }
+        });
+        
+        modal.classList.remove('hidden');
+    }).catch(error => {
+        hideLoading();
+        console.error('Error loading empty records:', error);
+        showError('Error loading empty records: ' + error);
+    });
+}
+
+function previewSoundFileGeneration() {
+    const templateSelect = document.getElementById('soundfile-template');
+    let template = templateSelect.value;
+    
+    if (template === 'custom') {
+        template = document.getElementById('custom-template').value;
+        if (!template) {
+            showError('Please enter a custom template');
+            return;
+        }
+    }
+    
+    console.log('Generating preview with template:', template);
+    console.log('Empty records data:', emptyRecordsData);
+    
+    if (!emptyRecordsData || emptyRecordsData.length === 0) {
+        const previewDiv = document.getElementById('soundfile-preview');
+        previewDiv.innerHTML = '<p style="color: red;">No empty records found.</p>';
+        return;
+    }
+    
+    // Generate preview locally using the records we already have
+    const previewDiv = document.getElementById('soundfile-preview');
+    const previews = emptyRecordsData.slice(0, 10).map(record => {
+        let generated = template;
+        // Replace {FieldName} placeholders with actual values
+        for (const [key, value] of Object.entries(record)) {
+            if (key !== 'index') {
+                const placeholder = `{${key}}`;
+                if (generated.includes(placeholder)) {
+                    // Clean the value: replace spaces with underscores
+                    const cleanValue = (value || '').replace(/\s+/g, '_');
+                    generated = generated.replace(new RegExp(`\\{${key}\\}`, 'g'), cleanValue);
+                }
+            }
+        }
+        return {
+            index: record.index,
+            reference: record.Reference || record.index,
+            generated: generated
+        };
+    });
+    
+    previewDiv.innerHTML = '<h5>Preview (first 10):</h5><ul>' +
+        previews.map(p => 
+            `<li>Record ${p.reference}: <strong>${p.generated}</strong></li>`
+        ).join('') +
+        (emptyRecordsData.length > 10 ? `<li><em>...and ${emptyRecordsData.length - 10} more</em></li>` : '') +
+        '</ul>';
+}
+
+async function applyAutoGeneration() {
+    const templateSelect = document.getElementById('soundfile-template');
+    let template = templateSelect.value;
+    
+    if (template === 'custom') {
+        template = document.getElementById('custom-template').value;
+        if (!template) {
+            showError('Please enter a custom template');
+            return;
+        }
+    }
+    
+    showLoading('Generating SoundFile values...');
+    
+    try {
+        const result = await window.pywebview.api.auto_generate_soundfiles(template);
+        hideLoading();
+        closeModal();
+        
+        if (result.success) {
+            showSuccess(`Generated ${result.count} SoundFile values`);
+            document.getElementById('empty-soundfile-warning').classList.add('hidden');
+            checkCanProceed();
+        } else {
+            showError('Error generating SoundFiles: ' + result.error);
+        }
+    } catch (error) {
+        hideLoading();
+        showError('Error: ' + error);
+    }
+}
+
+function showManualEntry() {
+    const modalBody = document.getElementById('modal-body');
+    
+    modalBody.innerHTML = `
+        <h3>Manual Entry for Empty SoundFile Elements</h3>
+        <p>Enter SoundFile values for each record:</p>
+        <div id="manual-entry-list" style="max-height: 400px; overflow-y: auto;">
+            ${emptyRecordsData.map((record, idx) => `
+                <div style="margin: 15px 0; padding: 10px; border: 1px solid #ddd; border-radius: 5px;">
+                    <strong>Record ${record.index}:</strong> ${record.Reference || ''} - ${record.Gloss || ''}
+                    <br>
+                    <input type="text" id="manual-sf-${idx}" 
+                           placeholder="Enter filename (e.g., ${record.Reference}_${record.Gloss || 'word'}.wav)"
+                           style="width: 100%; padding: 5px; margin-top: 5px;">
+                </div>
+            `).join('')}
+        </div>
+        <div class="button-row">
+            <button onclick="applyManualEntry()" class="btn-primary">Apply</button>
+            <button onclick="showFillSoundFilesModal()" class="btn-secondary">Back</button>
+            <button onclick="closeModal()" class="btn-secondary">Cancel</button>
+        </div>
+    `;
+}
+
+async function applyManualEntry() {
+    const entries = [];
+    
+    emptyRecordsData.forEach((record, idx) => {
+        const input = document.getElementById(`manual-sf-${idx}`);
+        if (input && input.value.trim()) {
+            entries.push({
+                index: record.index,
+                soundfile: input.value.trim()
+            });
+        }
+    });
+    
+    if (entries.length === 0) {
+        showError('Please enter at least one SoundFile value');
+        return;
+    }
+    
+    showLoading('Updating SoundFile values...');
+    
+    try {
+        const result = await window.pywebview.api.update_soundfiles_manual(entries);
+        hideLoading();
+        closeModal();
+        
+        if (result.success) {
+            showSuccess(`Updated ${result.count} SoundFile values`);
+            document.getElementById('empty-soundfile-warning').classList.add('hidden');
+            checkCanProceed();
+        } else {
+            showError('Error updating SoundFiles: ' + result.error);
+        }
+    } catch (error) {
+        hideLoading();
+        showError('Error: ' + error);
+    }
+}
+
+function skipEmptyRecords() {
+    if (confirm('Skip records with empty SoundFile elements? They will be excluded from processing.')) {
+        document.getElementById('empty-soundfile-warning').classList.add('hidden');
+        checkCanProceed();
+    }
+}
+
+function showFixDuplicatesModal() {
+    showError('Duplicate fixing functionality not yet implemented. Please continue anyway or fix duplicates manually in the XML.');
+}
+
+function skipDuplicates() {
+    if (confirm('Continue with duplicate Reference numbers? They will be treated as separate records.')) {
+        document.getElementById('duplicate-warning').classList.add('hidden');
+        checkCanProceed();
+    }
+}
+
+function closeModal() {
+    document.getElementById('modal-overlay').classList.add('hidden');
+}
+
+function checkCanProceed() {
+    const hasXML = state.xmlPath !== null;
+    const hasAudio = state.audioFolder !== null;
+    const noWarnings = document.querySelectorAll('.warning-box:not(.hidden)').length === 0;
+    
+    const proceedBtn = document.getElementById('btn-proceed-to-step1');
+    proceedBtn.disabled = !(hasXML && hasAudio && noWarnings);
 }

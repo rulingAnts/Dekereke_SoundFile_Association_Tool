@@ -10,6 +10,7 @@ from typing import Dict, List, Optional, Any
 from datetime import datetime
 import uuid
 import shutil
+import xml.etree.ElementTree as ET
 
 from xml_parser import DekeRekeXMLParser
 from audio_scanner import AudioFolderScanner
@@ -36,6 +37,9 @@ class DekeRekeAPI:
         self.suffix_mappings = {}  # suffix -> [field_names]
         self.conditional_rules = {}  # field_name -> rules
         self.operation_queue = []  # list of operations to execute
+        
+        # Cache empty soundfile info
+        self.empty_soundfile_indices = []
         
     def select_xml_file(self) -> Optional[str]:
         """Open file dialog to select XML file"""
@@ -85,6 +89,9 @@ class DekeRekeAPI:
             # Check for issues
             duplicates = self.xml_parser.find_duplicate_references()
             empty_soundfiles = self.xml_parser.find_empty_soundfiles()
+            
+            # Cache the empty soundfiles for later
+            self.empty_soundfile_indices = empty_soundfiles
             
             # Load settings for this project
             self.settings_manager = SettingsManager(xml_path)
@@ -369,6 +376,145 @@ class DekeRekeAPI:
             return {
                 'success': True,
                 'message': f'Backup created at {backup_folder}'
+            }
+            
+        except Exception as e:
+            return {'success': False, 'error': str(e)}
+    
+    def get_empty_soundfile_records(self) -> List[Dict[str, Any]]:
+        """Get records with empty SoundFile elements"""
+        try:
+            print("get_empty_soundfile_records called")
+            print(f"xml_parser exists: {self.xml_parser is not None}")
+            print(f"Cached empty indices: {self.empty_soundfile_indices}")
+            
+            if not self.xml_parser:
+                print("ERROR: No XML parser initialized")
+                return []
+            
+            # Use cached indices if available, otherwise scan
+            if self.empty_soundfile_indices:
+                empty_indices = self.empty_soundfile_indices
+            else:
+                empty_indices = self.xml_parser.find_empty_soundfiles()
+                
+            print(f"Found {len(empty_indices)} empty soundfiles at indices: {empty_indices}")
+            
+            records = []
+            
+            for idx in empty_indices:
+                if 0 <= idx < len(self.xml_parser.records):
+                    record = self.xml_parser.records[idx].copy()
+                    record['index'] = idx
+                    records.append(record)
+                    print(f"  Record {idx}: {record.get('Reference', '?')} - {record.get('Gloss', '?')}")
+                else:
+                    print(f"  WARNING: Index {idx} out of range (total records: {len(self.xml_parser.records)})")
+            
+            print(f"Returning {len(records)} records")
+            return records
+            
+        except Exception as e:
+            print(f"ERROR in get_empty_soundfile_records: {e}")
+            import traceback
+            traceback.print_exc()
+            return []
+    
+    def preview_soundfile_generation(self, template: str) -> List[Dict[str, Any]]:
+        """Preview what auto-generation would produce"""
+        try:
+            print(f"Preview requested with template: {template}")
+            
+            if not self.xml_parser:
+                print("ERROR: No XML parser initialized")
+                return []
+            
+            empty_indices = self.xml_parser.find_empty_soundfiles()
+            print(f"Found {len(empty_indices)} empty soundfiles: {empty_indices}")
+            
+            previews = []
+            
+            for idx in empty_indices:
+                if 0 <= idx < len(self.xml_parser.records):
+                    record = self.xml_parser.records[idx]
+                    generated = self.xml_parser.generate_soundfile_name(record, template)
+                    print(f"  Record {idx}: {record.get('Reference', '?')} -> {generated}")
+                    previews.append({
+                        'index': idx,
+                        'record': record.get('Reference', str(idx)),
+                        'generated': generated
+                    })
+                else:
+                    print(f"  WARNING: Index {idx} out of range")
+            
+            print(f"Returning {len(previews)} previews")
+            return previews
+            
+        except Exception as e:
+            print(f"ERROR in preview_soundfile_generation: {e}")
+            import traceback
+            traceback.print_exc()
+            return []
+    
+    def auto_generate_soundfiles(self, template: str) -> Dict[str, Any]:
+        """Auto-generate SoundFile values using template"""
+        try:
+            if not self.xml_parser:
+                return {'success': False, 'error': 'No XML file loaded'}
+            
+            empty_indices = self.xml_parser.find_empty_soundfiles()
+            count = 0
+            
+            for idx in empty_indices:
+                if 0 <= idx < len(self.xml_parser.records):
+                    record = self.xml_parser.records[idx]
+                    generated = self.xml_parser.generate_soundfile_name(record, template)
+                    # Sanitize filename: replace spaces with underscores, remove invalid chars
+                    generated = generated.replace(' ', '_')
+                    generated = ''.join(c for c in generated if c.isalnum() or c in '._-')
+                    
+                    if self.xml_parser.update_soundfile(idx, generated):
+                        count += 1
+            
+            # Save XML
+            if count > 0:
+                self.xml_parser.save()
+            
+            return {
+                'success': True,
+                'count': count
+            }
+            
+        except Exception as e:
+            return {'success': False, 'error': str(e)}
+    
+    def update_soundfiles_manual(self, entries: List[Dict[str, Any]]) -> Dict[str, Any]:
+        """Update SoundFile values manually"""
+        try:
+            if not self.xml_parser:
+                return {'success': False, 'error': 'No XML file loaded'}
+            
+            count = 0
+            
+            for entry in entries:
+                idx = entry.get('index')
+                soundfile = entry.get('soundfile', '').strip()
+                
+                if idx is not None and soundfile:
+                    # Sanitize filename
+                    soundfile = soundfile.replace(' ', '_')
+                    soundfile = ''.join(c for c in soundfile if c.isalnum() or c in '._-')
+                    
+                    if self.xml_parser.update_soundfile(idx, soundfile):
+                        count += 1
+            
+            # Save XML
+            if count > 0:
+                self.xml_parser.save()
+            
+            return {
+                'success': True,
+                'count': count
             }
             
         except Exception as e:

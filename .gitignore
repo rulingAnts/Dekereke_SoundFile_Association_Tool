@@ -1,3 +1,6 @@
+# Private offline test data
+private/
+
 # Python
 __pycache__/
 *.py[cod]

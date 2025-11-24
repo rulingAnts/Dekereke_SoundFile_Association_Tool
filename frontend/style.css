@@ -272,6 +272,9 @@ label input[type="checkbox"] {
 .draggable-list,
 .droppable-list {
     min-height: 300px;
+    max-height: 500px;
+    overflow-y: auto;
+    overflow-x: hidden;
 }
 
 .draggable-item {
@@ -307,7 +310,9 @@ label input[type="checkbox"] {
     background-color: #eff6ff;
 }
 
-.droppable-item .mapped-suffix {
+.droppable-item .mapped-suffix,
+.droppable-item .mapped-tile,
+.draggable-item .mapped-tile {
     display: inline-block;
     background-color: var(--primary-color);
     color: white;
@@ -315,7 +320,25 @@ label input[type="checkbox"] {
     border-radius: 4px;
     margin-right: 0.5rem;
     margin-bottom: 0.25rem;
+    margin-top: 0.25rem;
     font-size: 0.875rem;
+    cursor: pointer;
+    transition: all 0.2s;
+    position: relative;
+}
+
+.droppable-item .mapped-suffix:hover,
+.droppable-item .mapped-tile:hover,
+.draggable-item .mapped-tile:hover {
+    background-color: #dc2626;
+    transform: scale(1.05);
+}
+
+.droppable-item .mapped-suffix:hover::after,
+.droppable-item .mapped-tile:hover::after,
+.draggable-item .mapped-tile:hover::after {
+    content: ' ✕';
+    font-weight: bold;
 }
 
 /* Matching Interface */
