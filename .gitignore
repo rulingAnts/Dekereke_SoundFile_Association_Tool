@@ -46,3 +46,7 @@ orphans/
 # Test data (if any)
 test_data/
 sample_audio/
+
+# Test outputs
+tests/__pycache__/
+tests/*.pyc
