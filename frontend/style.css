@@ -285,6 +285,10 @@ label input[type="checkbox"] {
     margin-bottom: 0.5rem;
     cursor: move;
     transition: all 0.2s;
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.5rem;
+    align-items: center;
 }
 
 .draggable-item:hover {
@@ -303,6 +307,10 @@ label input[type="checkbox"] {
     padding: 0.75rem;
     margin-bottom: 0.5rem;
     min-height: 50px;
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.5rem;
+    align-items: center;
 }
 
 .droppable-item.drag-over {
@@ -318,13 +326,10 @@ label input[type="checkbox"] {
     color: white;
     padding: 0.25rem 0.5rem;
     border-radius: 4px;
-    margin-right: 0.5rem;
-    margin-bottom: 0.25rem;
-    margin-top: 0.25rem;
     font-size: 0.875rem;
     cursor: pointer;
     transition: all 0.2s;
-    position: relative;
+    white-space: nowrap;
 }
 
 .droppable-item .mapped-suffix:hover,

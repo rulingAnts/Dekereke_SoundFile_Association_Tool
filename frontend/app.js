@@ -343,7 +343,23 @@ function addMappingTile(suffix, field) {
         el => el.dataset.field === field
     );
     
-    if (!suffixItem || !fieldItem) return;
+    if (!suffixItem || !fieldItem) {
+        console.warn(`Could not find items for mapping: ${suffix} -> ${field}`);
+        return;
+    }
+    
+    // Check if tiles already exist (prevent duplicates)
+    const existingFieldTile = fieldItem.querySelector(`[data-suffix="${suffix}"][data-field="${field}"]`);
+    const existingSuffixTile = suffixItem.querySelector(`[data-suffix="${suffix}"][data-field="${field}"]`);
+    
+    if (existingFieldTile && existingSuffixTile) {
+        // Both tiles already exist, no need to add
+        return;
+    }
+    
+    // Remove any orphaned tiles before adding new ones
+    if (existingFieldTile) existingFieldTile.remove();
+    if (existingSuffixTile) existingSuffixTile.remove();
     
     // Create tile for field (showing suffix)
     const fieldTile = document.createElement('span');
@@ -393,11 +409,14 @@ async function loadDekeRekeSettings() {
         const result = await window.pywebview.api.load_dekereke_settings();
         
         if (result.success) {
-            // Clear existing mappings
-            state.suffixMappings = result.mappings;
+            // Clear existing mappings from state
+            state.suffixMappings = {};
             
-            // Rebuild UI to show loaded mappings
+            // Rebuild UI (this clears all tiles)
             buildMappingUI();
+            
+            // Set new mappings in state
+            state.suffixMappings = result.mappings;
             
             // Add the mapping tiles
             for (const suffix in result.mappings) {
