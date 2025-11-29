@@ -259,6 +259,57 @@ function buildMappingUI() {
         
         fieldList.appendChild(item);
     }
+    
+    // Refresh tiles from state
+    refreshMappingTiles();
+}
+
+// Refresh mapping tiles from state (called after any mapping change)
+function refreshMappingTiles() {
+    // Clear all existing tiles
+    document.querySelectorAll('.mapped-tile').forEach(tile => tile.remove());
+    
+    // Rebuild tiles from state.suffixMappings
+    for (const suffix in state.suffixMappings) {
+        const fields = state.suffixMappings[suffix];
+        for (const field of fields) {
+            // Find the suffix item (must be draggable-item, not a tile)
+            const suffixItem = document.querySelector(`.draggable-item[data-suffix="${suffix}"]`);
+            // Find the field item (must be draggable-item, not a tile)
+            const fieldItem = Array.from(document.querySelectorAll('.draggable-item[data-field]')).find(
+                el => el.dataset.field === field
+            );
+            
+            if (!suffixItem || !fieldItem) {
+                console.warn(`Could not find items for mapping: ${suffix} -> ${field}`)
+                continue;
+            }
+            
+            // Create tile for field (showing suffix)
+            const fieldTile = document.createElement('span');
+            fieldTile.className = 'mapped-tile';
+            fieldTile.dataset.suffix = suffix;
+            fieldTile.dataset.field = field;
+            fieldTile.textContent = suffix || '(no suffix)';
+            fieldTile.title = 'Click to remove';
+            fieldTile.addEventListener('click', function() {
+                removeMapping(suffix, field);
+            });
+            fieldItem.appendChild(fieldTile);
+            
+            // Create tile for suffix (showing field)
+            const suffixTile = document.createElement('span');
+            suffixTile.className = 'mapped-tile';
+            suffixTile.dataset.suffix = suffix;
+            suffixTile.dataset.field = field;
+            suffixTile.textContent = field;
+            suffixTile.title = 'Click to remove';
+            suffixTile.addEventListener('click', function() {
+                removeMapping(suffix, field);
+            });
+            suffixItem.appendChild(suffixTile);
+        }
+    }
 }
 
 // Drag and drop handlers
@@ -327,63 +378,11 @@ function handleDrop(e) {
         }
         state.suffixMappings[suffix].push(field);
         
-        // Update UI on both sides
-        addMappingTile(suffix, field);
+        // Refresh UI from state
+        refreshMappingTiles();
     }
     
     return false;
-}
-
-// Add mapping tile to both suffix and field
-function addMappingTile(suffix, field) {
-    // Find the suffix item
-    const suffixItem = document.querySelector(`[data-suffix="${suffix}"]`);
-    // Find the field item
-    const fieldItem = Array.from(document.querySelectorAll('[data-field]')).find(
-        el => el.dataset.field === field
-    );
-    
-    if (!suffixItem || !fieldItem) {
-        console.warn(`Could not find items for mapping: ${suffix} -> ${field}`);
-        return;
-    }
-    
-    // Check if tiles already exist (prevent duplicates)
-    const existingFieldTile = fieldItem.querySelector(`[data-suffix="${suffix}"][data-field="${field}"]`);
-    const existingSuffixTile = suffixItem.querySelector(`[data-suffix="${suffix}"][data-field="${field}"]`);
-    
-    if (existingFieldTile && existingSuffixTile) {
-        // Both tiles already exist, no need to add
-        return;
-    }
-    
-    // Remove any orphaned tiles before adding new ones
-    if (existingFieldTile) existingFieldTile.remove();
-    if (existingSuffixTile) existingSuffixTile.remove();
-    
-    // Create tile for field (showing suffix)
-    const fieldTile = document.createElement('span');
-    fieldTile.className = 'mapped-tile';
-    fieldTile.dataset.suffix = suffix;
-    fieldTile.dataset.field = field;
-    fieldTile.textContent = suffix || '(no suffix)';
-    fieldTile.title = 'Click to remove';
-    fieldTile.addEventListener('click', function() {
-        removeMapping(suffix, field);
-    });
-    fieldItem.appendChild(fieldTile);
-    
-    // Create tile for suffix (showing field)
-    const suffixTile = document.createElement('span');
-    suffixTile.className = 'mapped-tile';
-    suffixTile.dataset.suffix = suffix;
-    suffixTile.dataset.field = field;
-    suffixTile.textContent = field;
-    suffixTile.title = 'Click to remove';
-    suffixTile.addEventListener('click', function() {
-        removeMapping(suffix, field);
-    });
-    suffixItem.appendChild(suffixTile);
 }
 
 // Remove mapping
@@ -396,9 +395,8 @@ function removeMapping(suffix, field) {
         }
     }
     
-    // Remove tiles from both sides
-    const tiles = document.querySelectorAll(`[data-suffix="${suffix}"][data-field="${field}"]`);
-    tiles.forEach(tile => tile.remove());
+    // Refresh UI from state
+    refreshMappingTiles();
 }
 
 // Load mappings from Dekereke settings file
@@ -409,22 +407,11 @@ async function loadDekeRekeSettings() {
         const result = await window.pywebview.api.load_dekereke_settings();
         
         if (result.success) {
-            // Clear existing mappings from state
-            state.suffixMappings = {};
-            
-            // Rebuild UI (this clears all tiles)
-            buildMappingUI();
-            
-            // Set new mappings in state
+            // Update state with loaded mappings
             state.suffixMappings = result.mappings;
             
-            // Add the mapping tiles
-            for (const suffix in result.mappings) {
-                const fields = result.mappings[suffix];
-                for (const field of fields) {
-                    addMappingTile(suffix, field);
-                }
-            }
+            // Refresh UI from state
+            refreshMappingTiles();
             
             showSuccess(`Loaded ${result.count} suffix mappings from Dekereke settings`);
         } else {
