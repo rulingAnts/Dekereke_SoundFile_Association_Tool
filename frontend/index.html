@@ -145,35 +145,59 @@
             <section id="step3-screen" class="screen">
                 <h2>Step 3: Match Files to Records</h2>
                 
-                <!-- Step 3a: Suggested Matches -->
-                <div id="step3a-container">
+                <!-- Suggested Matches (only shown if matches found) -->
+                <div id="step3-suggested" class="hidden">
                     <h3>Suggested Matches</h3>
                     <p>Review automatically suggested matches. Check the boxes for matches you want to accept.</p>
                     <div id="suggested-matches-list"></div>
                     <div class="button-row">
                         <button id="btn-accept-suggestions" class="btn-primary">Accept Selected</button>
-                        <button id="btn-skip-to-manual" class="btn-secondary">Skip to Manual Matching</button>
+                        <button id="btn-skip-suggestions" class="btn-secondary">Skip</button>
+                    </div>
+                    <hr style="margin: 2rem 0;">
+                </div>
+
+                <!-- Data Sheet View -->
+                <div id="step3-datasheet">
+                    <div class="datasheet-controls">
+                        <button id="btn-column-settings" class="btn-secondary">Column Settings</button>
+                        <button id="btn-toggle-filters" class="btn-secondary">Toggle Filters</button>
+                        <button id="btn-clear-tentative" class="btn-secondary">Clear All Tentative</button>
+                    </div>
+                    
+                    <div class="datasheet-layout">
+                        <!-- Main Data Sheet -->
+                        <div class="datasheet-main">
+                            <div id="datasheet-container" class="datasheet-scroll">
+                                <table id="datasheet-table" class="datasheet-table">
+                                    <thead id="datasheet-header"></thead>
+                                    <tbody id="datasheet-body"></tbody>
+                                </table>
+                            </div>
+                        </div>
+                        
+                        <!-- Orphaned Files Pane -->
+                        <div class="orphaned-pane">
+                            <h4>Orphaned Files <span id="orphaned-count" class="count-badge">0</span></h4>
+                            <div id="orphaned-files-list" class="orphaned-list"></div>
+                        </div>
+                    </div>
+                    
+                    <!-- Filter Pane (collapsible bottom pane) -->
+                    <div id="filter-pane" class="filter-pane hidden">
+                        <div class="filter-header">
+                            <h4>Filters</h4>
+                            <button id="btn-clear-filters" class="btn-small">Clear All</button>
+                        </div>
+                        <div id="filter-conditions"></div>
+                        <div class="button-row">
+                            <button id="btn-apply-filters" class="btn-primary">Apply Filters</button>
+                        </div>
                     </div>
                 </div>
 
-                <!-- Step 3b: Manual Matching -->
-                <div id="step3b-container" class="hidden">
-                    <h3>Manual Matching</h3>
-                    <div class="matching-container">
-                        <div class="matching-pane">
-                            <h4>Missing Files (Expected but not found)</h4>
-                            <div id="missing-files-list" class="drop-zone"></div>
-                        </div>
-                        <div class="matching-pane">
-                            <h4>Orphaned Files (Found but not expected)</h4>
-                            <div id="orphaned-files-list" class="drag-zone"></div>
-                        </div>
-                    </div>
-                    <div class="button-row">
-                        <button id="btn-mark-orphaned" class="btn-secondary">Mark Selected as Orphaned</button>
-                        <button id="btn-mark-unrecorded" class="btn-secondary">Mark Selected as Unrecorded</button>
-                        <button id="btn-proceed-to-review" class="btn-primary">Proceed to Review</button>
-                    </div>
+                <div class="button-row" style="margin-top: 1.5rem;">
+                    <button id="btn-proceed-to-review" class="btn-primary">Proceed to Review</button>
                 </div>
             </section>
 

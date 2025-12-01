@@ -14,7 +14,17 @@ const state = {
     conditionalRules: {},
     fieldGroups: {},  // groupName -> [fieldNames]
     operationQueue: [],
-    currentScreen: 'setup'
+    currentScreen: 'setup',
+    
+    // Step 3 data
+    datasheetData: null,
+    visibleColumns: [],
+    columnOrder: [],
+    sortColumn: null,
+    sortDirection: 'asc',
+    filters: [],
+    tentativeAssociations: {},  // {orphanedFile: {recordIdx, field, suffix, newName}}
+    activeModal: null
 };
 
 // Wait for pywebview to be ready
@@ -56,6 +66,17 @@ async function loadPreviousSettings() {
             // Restore field groups
             if (settings.field_groups && Object.keys(settings.field_groups).length > 0) {
                 state.fieldGroups = settings.field_groups;
+            }
+            
+            // Restore datasheet filters
+            if (settings.datasheet_filters) {
+                state.filters = settings.datasheet_filters;
+            }
+            
+            // Restore visible columns
+            if (settings.visible_columns && settings.visible_columns.length > 0) {
+                state.visibleColumns = settings.visible_columns;
+                state.columnOrder = [...settings.visible_columns];
             }
             
             // Auto-load last XML if exists
@@ -172,7 +193,14 @@ function setupEventListeners() {
 
     // Step 3
     document.getElementById('btn-accept-suggestions').addEventListener('click', acceptSuggestions);
-    document.getElementById('btn-skip-to-manual').addEventListener('click', skipToManual);
+    document.getElementById('btn-skip-suggestions').addEventListener('click', () => {
+        document.getElementById('step3-suggested').classList.add('hidden');
+    });
+    document.getElementById('btn-column-settings').addEventListener('click', showColumnSettings);
+    document.getElementById('btn-toggle-filters').addEventListener('click', toggleFilters);
+    document.getElementById('btn-clear-tentative').addEventListener('click', clearAllTentative);
+    document.getElementById('btn-apply-filters').addEventListener('click', applyFilters);
+    document.getElementById('btn-clear-filters').addEventListener('click', clearFilters);
     document.getElementById('btn-proceed-to-review').addEventListener('click', () => showScreen('review'));
 
     // Review
@@ -198,11 +226,14 @@ function showScreen(screenName) {
             btn.classList.add('active');
         }
     });
-
+    
+    // Load Step 3 data when navigating to it
+    if (screenName === 'step3') {
+        loadStep3Data();
+    }
+    
     state.currentScreen = screenName;
-}
-
-// Select XML file
+}// Select XML file
 async function selectXMLFile() {
     showLoading('Selecting XML file...');
     
@@ -1356,6 +1387,651 @@ async function saveConditions() {
     }
 }
 
+// ========================================
+// STEP 3: DATA SHEET MATCHING FUNCTIONS
+// ========================================
+
+// Load Step 3 data
+async function loadStep3Data() {
+    showLoading('Loading data sheet...');
+    
+    try {
+        const result = await window.pywebview.api.get_datasheet_data();
+        
+        if (result.success) {
+            state.datasheetData = result;
+            
+            // Initialize column visibility (show mapped fields by default)
+            state.visibleColumns = ['Reference', ...result.mapped_fields];
+            state.columnOrder = [...state.visibleColumns];
+            
+            // Build data sheet
+            buildDataSheet();
+            renderOrphanedFiles();
+            
+            // Check for suggested matches
+            checkSuggestedMatches();
+        } else {
+            showError('Error loading data sheet: ' + result.error);
+        }
+    } catch (error) {
+        showError('Error loading Step 3: ' + error);
+    } finally {
+        hideLoading();
+    }
+}
+
+// Build the data sheet table
+function buildDataSheet() {
+    if (!state.datasheetData) return;
+    
+    const thead = document.getElementById('datasheet-header');
+    const tbody = document.getElementById('datasheet-body');
+    
+    thead.innerHTML = '';
+    tbody.innerHTML = '';
+    
+    // Build header row
+    const headerRow = document.createElement('tr');
+    state.columnOrder.forEach((field, idx) => {
+        const th = document.createElement('th');
+        th.textContent = field;
+        th.dataset.field = field;
+        
+        // Frozen Reference column
+        if (field === 'Reference') {
+            th.classList.add('frozen-col');
+        }
+        
+        // Add sort indicator
+        if (state.sortColumn === field) {
+            th.classList.add(state.sortDirection === 'asc' ? 'sorted-asc' : 'sorted-desc');
+        }
+        
+        // Click to sort
+        th.addEventListener('click', () => sortByColumn(field));
+        
+        headerRow.appendChild(th);
+    });
+    thead.appendChild(headerRow);
+    
+    // Get records (apply filters if any)
+    let records = state.datasheetData.records;
+    if (state.filters.length > 0) {
+        records = applyFiltersToRecords(records);
+    }
+    
+    // Apply sorting
+    if (state.sortColumn) {
+        records = sortRecords(records, state.sortColumn, state.sortDirection);
+    }
+    
+    // Build data rows
+    records.forEach((record, recordIdx) => {
+        const tr = document.createElement('tr');
+        
+        state.columnOrder.forEach(field => {
+            const td = document.createElement('td');
+            td.textContent = record[field] || '';
+            td.dataset.recordIdx = recordIdx;
+            td.dataset.field = field;
+            
+            // Frozen Reference column
+            if (field === 'Reference') {
+                td.classList.add('frozen-col');
+            }
+            
+            // Color coding for mapped fields (including SoundFile for empty suffix)
+            const isMappedField = state.datasheetData.mapped_fields.includes(field);
+            
+            if (isMappedField) {
+                const cellStatus = getCellStatus(recordIdx, field);
+                if (cellStatus.matched) {
+                    td.classList.add(cellStatus.tentative ? 'matched-tentative' : 'matched');
+                } else if (cellStatus.expected) {
+                    td.classList.add('missing');
+                }
+                
+                // Click to show modal
+                td.addEventListener('click', (e) => showCellModal(e, recordIdx, field, cellStatus));
+                
+                // Drag-and-drop only for non-SoundFile fields (or if user is associating with empty suffix)
+                if (field !== 'SoundFile' || (field === 'SoundFile' && '' in state.suffixMappings)) {
+                    td.addEventListener('dragover', handleDragOver);
+                    td.addEventListener('drop', (e) => handleDrop(e, recordIdx, field));
+                    td.addEventListener('dragleave', handleDragLeave);
+                }
+            }
+            
+            tr.appendChild(td);
+        });
+        
+        tbody.appendChild(tr);
+    });
+}
+
+// Get cell status (matched, expected, tentative)
+function getCellStatus(recordIdx, field) {
+    const result = {
+        matched: false,
+        expected: false,
+        tentative: false,
+        files: []
+    };
+    
+    // Special handling for SoundFile field with empty suffix
+    if (field === 'SoundFile' && '' in state.suffixMappings) {
+        const key = `${recordIdx}_SoundFile_`;
+        
+        // Check if expected
+        if (state.datasheetData.expected_files[key]) {
+            result.expected = true;
+            result.files.push({
+                suffix: '',
+                expected: state.datasheetData.expected_files[key],
+                matched: state.datasheetData.matched_files[key] || null
+            });
+        }
+        
+        // Check if matched
+        if (state.datasheetData.matched_files[key]) {
+            result.matched = true;
+        }
+    }
+    
+    // Check each suffix associated with this field
+    for (const suffix in state.suffixMappings) {
+        if (state.suffixMappings[suffix].includes(field)) {
+            const key = `${recordIdx}_${field}_${suffix}`;
+            
+            // Check if expected
+            if (state.datasheetData.expected_files[key]) {
+                result.expected = true;
+                result.files.push({
+                    suffix: suffix,
+                    expected: state.datasheetData.expected_files[key],
+                    matched: state.datasheetData.matched_files[key] || null
+                });
+            }
+            
+            // Check if matched
+            if (state.datasheetData.matched_files[key]) {
+                result.matched = true;
+            }
+        }
+    }
+    
+    // Check for tentative associations
+    for (const orphanFile in state.tentativeAssociations) {
+        const assoc = state.tentativeAssociations[orphanFile];
+        if (assoc.recordIdx === recordIdx && assoc.field === field) {
+            result.matched = true;
+            result.tentative = true;
+            result.files.push({
+                suffix: assoc.suffix,
+                expected: assoc.newName,
+                matched: assoc.newName,
+                tentative: true,
+                originalFile: orphanFile
+            });
+        }
+    }
+    
+    return result;
+}
+
+// Sort by column
+function sortByColumn(field) {
+    if (state.sortColumn === field) {
+        // Toggle direction
+        state.sortDirection = state.sortDirection === 'asc' ? 'desc' : 'asc';
+    } else {
+        state.sortColumn = field;
+        state.sortDirection = 'asc';
+    }
+    
+    buildDataSheet();
+}
+
+// Sort records helper
+function sortRecords(records, field, direction) {
+    return [...records].sort((a, b) => {
+        const aVal = (a[field] || '').toString().toLowerCase();
+        const bVal = (b[field] || '').toString().toLowerCase();
+        
+        if (direction === 'asc') {
+            return aVal.localeCompare(bVal);
+        } else {
+            return bVal.localeCompare(aVal);
+        }
+    });
+}
+
+// Render orphaned files pane
+function renderOrphanedFiles() {
+    if (!state.datasheetData) return;
+    
+    const list = document.getElementById('orphaned-files-list');
+    const countBadge = document.getElementById('orphaned-count');
+    
+    list.innerHTML = '';
+    
+    let orphanedCount = 0;
+    
+    state.datasheetData.orphaned_files.forEach(filename => {
+        const item = document.createElement('div');
+        item.className = 'orphaned-file-item';
+        item.draggable = true;
+        item.dataset.filename = filename;
+        
+        // Check if tentatively associated
+        const tentative = state.tentativeAssociations[filename];
+        if (tentative) {
+            item.classList.add('tentative');
+            item.innerHTML = `
+                <div class="new-name">${tentative.newName}</div>
+                <div class="old-name">${filename}</div>
+            `;
+            item.title = `${filename} → ${tentative.newName}`;
+        } else {
+            item.textContent = filename;
+            orphanedCount++;
+        }
+        
+        // Drag events
+        item.addEventListener('dragstart', (e) => {
+            e.dataTransfer.effectAllowed = 'move';
+            e.dataTransfer.setData('text/plain', filename);
+            item.classList.add('dragging');
+        });
+        
+        item.addEventListener('dragend', (e) => {
+            item.classList.remove('dragging');
+        });
+        
+        // Click to show details if tentative
+        if (tentative) {
+            item.addEventListener('click', () => showTentativeDetails(filename, tentative));
+        }
+        
+        list.appendChild(item);
+    });
+    
+    countBadge.textContent = orphanedCount;
+}
+
+// Handle drag over cell
+function handleDragOver(e) {
+    e.preventDefault();
+    e.dataTransfer.dropEffect = 'move';
+    e.currentTarget.classList.add('drop-target');
+}
+
+// Handle drag leave cell
+function handleDragLeave(e) {
+    e.currentTarget.classList.remove('drop-target');
+}
+
+// Handle drop on cell
+async function handleDrop(e, recordIdx, field) {
+    e.preventDefault();
+    e.currentTarget.classList.remove('drop-target');
+    
+    const orphanFile = e.dataTransfer.getData('text/plain');
+    if (!orphanFile) return;
+    
+    // Get record
+    const record = state.datasheetData.records[recordIdx];
+    const baseFilename = record.SoundFile;
+    
+    if (!baseFilename) {
+        showError('Record has no base filename');
+        return;
+    }
+    
+    // Determine which suffix to use
+    const suffixesForField = [];
+    
+    // Special case: if dropping on SoundFile field and empty suffix exists
+    if (field === 'SoundFile' && '' in state.suffixMappings) {
+        suffixesForField.push('');
+    }
+    
+    // Check other suffix mappings for this field
+    for (const suffix in state.suffixMappings) {
+        if (state.suffixMappings[suffix].includes(field)) {
+            suffixesForField.push(suffix);
+        }
+    }
+    
+    if (suffixesForField.length === 0) {
+        showError('No suffix mapping for this field');
+        return;
+    }
+    
+    // If multiple suffixes, show picker
+    let selectedSuffix;
+    if (suffixesForField.length === 1) {
+        selectedSuffix = suffixesForField[0];
+    } else {
+        selectedSuffix = await showSuffixPicker(suffixesForField, field);
+        if (!selectedSuffix) return;
+    }
+    
+    // Calculate new name
+    const baseName = baseFilename.rsplit('.', 1)[0];
+    const ext = baseFilename.includes('.') ? '.' + baseFilename.split('.').pop() : '.wav';
+    const newName = baseName + selectedSuffix + ext;
+    
+    // Create tentative association
+    state.tentativeAssociations[orphanFile] = {
+        recordIdx: recordIdx,
+        field: field,
+        suffix: selectedSuffix,
+        newName: newName,
+        oldName: orphanFile
+    };
+    
+    // Refresh UI
+    buildDataSheet();
+    renderOrphanedFiles();
+    
+    showSuccess(`Tentatively associated ${orphanFile} → ${newName}`);
+}
+
+// Show suffix picker modal
+function showSuffixPicker(suffixes, field) {
+    return new Promise((resolve) => {
+        const modal = document.createElement('div');
+        modal.className = 'modal';
+        modal.innerHTML = `
+            <div class="modal-content" style="max-width: 400px;">
+                <h3>Select Suffix</h3>
+                <p>Multiple suffixes are mapped to <strong>${field}</strong>. Which one should be used?</p>
+                <div id="suffix-options" style="display: flex; flex-direction: column; gap: 0.5rem; margin: 1rem 0;"></div>
+                <div class="button-row">
+                    <button id="btn-cancel-suffix" class="btn-secondary">Cancel</button>
+                </div>
+            </div>
+        `;
+        
+        document.body.appendChild(modal);
+        
+        const optionsDiv = modal.querySelector('#suffix-options');
+        suffixes.forEach(suffix => {
+            const btn = document.createElement('button');
+            btn.className = 'btn-primary';
+            btn.textContent = suffix === '' ? '(no suffix - whole record)' : suffix;
+            btn.addEventListener('click', () => {
+                modal.remove();
+                resolve(suffix);
+            });
+            optionsDiv.appendChild(btn);
+        });
+        
+        modal.querySelector('#btn-cancel-suffix').addEventListener('click', () => {
+            modal.remove();
+            resolve(null);
+        });
+    });
+}
+
+// Show cell modal (speech balloon)
+function showCellModal(e, recordIdx, field, cellStatus) {
+    // Close existing modal
+    if (state.activeModal) {
+        state.activeModal.remove();
+        state.activeModal = null;
+    }
+    
+    const modal = document.createElement('div');
+    modal.className = 'cell-modal';
+    
+    // Position modal next to cell
+    const rect = e.currentTarget.getBoundingClientRect();
+    const spaceOnRight = window.innerWidth - rect.right;
+    
+    if (spaceOnRight > 300) {
+        modal.classList.add('right');
+        modal.style.left = (rect.right + 10) + 'px';
+    } else {
+        modal.classList.add('left');
+        modal.style.left = (rect.left - 260) + 'px';
+    }
+    modal.style.top = rect.top + 'px';
+    
+    // Build modal content
+    let filesHTML = '';
+    cellStatus.files.forEach(fileInfo => {
+        if (fileInfo.matched) {
+            const tentativeClass = fileInfo.tentative ? 'tentative' : '';
+            filesHTML += `
+                <div class="cell-modal-file ${tentativeClass}">
+                    <span>${fileInfo.matched}</span>
+                    ${fileInfo.tentative ? '<button class="btn-danger btn-small" onclick="removeTentative(\'' + fileInfo.originalFile + '\')">Remove</button>' : ''}
+                </div>
+            `;
+        } else if (fileInfo.expected) {
+            filesHTML += `
+                <div class="cell-modal-file missing">
+                    <span>${fileInfo.expected} (missing)</span>
+                </div>
+            `;
+        }
+    });
+    
+    modal.innerHTML = `
+        <div class="cell-modal-header">
+            <strong>${field}</strong>
+            <button class="cell-modal-close">&times;</button>
+        </div>
+        <div class="cell-modal-files">
+            ${filesHTML || '<p style="color: #6b7280; font-size: 0.875rem;">No files associated</p>'}
+        </div>
+    `;
+    
+    document.body.appendChild(modal);
+    state.activeModal = modal;
+    
+    // Close button
+    modal.querySelector('.cell-modal-close').addEventListener('click', () => {
+        modal.remove();
+        state.activeModal = null;
+    });
+    
+    // Close when clicking outside
+    setTimeout(() => {
+        document.addEventListener('click', function closeModal(e) {
+            if (!modal.contains(e.target) && !e.target.closest('.datasheet-table td')) {
+                modal.remove();
+                state.activeModal = null;
+                document.removeEventListener('click', closeModal);
+            }
+        });
+    }, 100);
+}
+
+// Remove tentative association
+window.removeTentative = function(orphanFile) {
+    delete state.tentativeAssociations[orphanFile];
+    
+    // Close modal
+    if (state.activeModal) {
+        state.activeModal.remove();
+        state.activeModal = null;
+    }
+    
+    // Refresh UI
+    buildDataSheet();
+    renderOrphanedFiles();
+    
+    showSuccess('Removed tentative association');
+};
+
+// Show tentative details
+function showTentativeDetails(filename, tentative) {
+    const modal = document.createElement('div');
+    modal.className = 'modal';
+    modal.innerHTML = `
+        <div class="modal-content" style="max-width: 500px;">
+            <h3>Tentative Association</h3>
+            <div style="margin: 1rem 0;">
+                <p><strong>Original:</strong> ${tentative.oldName}</p>
+                <p><strong>New Name:</strong> ${tentative.newName}</p>
+                <p><strong>Record:</strong> ${state.datasheetData.records[tentative.recordIdx].Reference}</p>
+                <p><strong>Field:</strong> ${tentative.field}</p>
+                <p><strong>Suffix:</strong> ${tentative.suffix}</p>
+            </div>
+            <div class="button-row">
+                <button id="btn-remove-tentative" class="btn-danger">Remove Association</button>
+                <button id="btn-close-tentative" class="btn-secondary">Close</button>
+            </div>
+        </div>
+    `;
+    
+    document.body.appendChild(modal);
+    
+    modal.querySelector('#btn-remove-tentative').addEventListener('click', () => {
+        delete state.tentativeAssociations[filename];
+        modal.remove();
+        buildDataSheet();
+        renderOrphanedFiles();
+        showSuccess('Removed tentative association');
+    });
+    
+    modal.querySelector('#btn-close-tentative').addEventListener('click', () => {
+        modal.remove();
+    });
+}
+
+// Clear all tentative associations
+function clearAllTentative() {
+    if (Object.keys(state.tentativeAssociations).length === 0) {
+        showError('No tentative associations to clear');
+        return;
+    }
+    
+    if (confirm('Clear all tentative associations?')) {
+        state.tentativeAssociations = {};
+        buildDataSheet();
+        renderOrphanedFiles();
+        showSuccess('Cleared all tentative associations');
+    }
+}
+
+// Column settings modal
+function showColumnSettings() {
+    if (!state.datasheetData) return;
+    
+    const modal = document.createElement('div');
+    modal.className = 'modal';
+    modal.innerHTML = `
+        <div class="modal-content" style="max-width: 600px;">
+            <h3>Column Settings</h3>
+            <p>Show, hide, and reorder columns</p>
+            <div id="column-list" style="margin: 1rem 0;"></div>
+            <div class="button-row">
+                <button id="btn-save-columns" class="btn-primary">Save</button>
+                <button id="btn-cancel-columns" class="btn-secondary">Cancel</button>
+            </div>
+        </div>
+    `;
+    
+    document.body.appendChild(modal);
+    
+    const columnList = modal.querySelector('#column-list');
+    state.datasheetData.field_names.forEach(field => {
+        const div = document.createElement('div');
+        div.style.cssText = 'padding: 0.5rem; border: 1px solid #e5e7eb; margin-bottom: 0.25rem; display: flex; align-items: center; gap: 0.5rem;';
+        
+        const checkbox = document.createElement('input');
+        checkbox.type = 'checkbox';
+        checkbox.checked = state.visibleColumns.includes(field);
+        checkbox.disabled = field === 'Reference';  // Can't hide Reference
+        
+        const label = document.createElement('span');
+        label.textContent = field;
+        
+        div.appendChild(checkbox);
+        div.appendChild(label);
+        columnList.appendChild(div);
+    });
+    
+    modal.querySelector('#btn-save-columns').addEventListener('click', async () => {
+        const checkboxes = columnList.querySelectorAll('input[type="checkbox"]');
+        state.visibleColumns = [];
+        state.columnOrder = [];
+        
+        checkboxes.forEach((cb, idx) => {
+            if (cb.checked) {
+                const field = state.datasheetData.field_names[idx];
+                state.visibleColumns.push(field);
+                state.columnOrder.push(field);
+            }
+        });
+        
+        // Save to backend
+        try {
+            await window.pywebview.api.save_datasheet_settings(state.filters, state.visibleColumns);
+        } catch (error) {
+            console.error('Error saving column settings:', error);
+        }
+        
+        modal.remove();
+        buildDataSheet();
+    });
+    
+    modal.querySelector('#btn-cancel-columns').addEventListener('click', () => {
+        modal.remove();
+    });
+}
+
+// Toggle filters pane
+function toggleFilters() {
+    const filterPane = document.getElementById('filter-pane');
+    filterPane.classList.toggle('hidden');
+}
+
+// Apply filters
+async function applyFilters() {
+    // Save filters to backend
+    try {
+        await window.pywebview.api.save_datasheet_settings(state.filters, state.visibleColumns);
+    } catch (error) {
+        console.error('Error saving filters:', error);
+    }
+    
+    // Rebuild the sheet
+    buildDataSheet();
+}
+
+// Clear filters
+async function clearFilters() {
+    state.filters = [];
+    
+    // Save cleared filters
+    try {
+        await window.pywebview.api.save_datasheet_settings(state.filters, state.visibleColumns);
+    } catch (error) {
+        console.error('Error saving filters:', error);
+    }
+    
+    buildDataSheet();
+}
+
+// Apply filters to records
+function applyFiltersToRecords(records) {
+    // TODO: Implement filter logic
+    return records;
+}
+
+// Check for suggested matches
+async function checkSuggestedMatches() {
+    // TODO: Implement fuzzy matching
+    // For now, hide suggested section
+    document.getElementById('step3-suggested').classList.add('hidden');
+}
+
 // Accept suggestions
 async function acceptSuggestions() {
     // Get checked suggestions
@@ -1364,80 +2040,29 @@ async function acceptSuggestions() {
     checkboxes.forEach(checkbox => {
         const suggestion = JSON.parse(checkbox.dataset.suggestion);
         
-        // Add to operation queue
-        state.operationQueue.push({
-            type: 'rename',
-            old_filename: suggestion.orphan,
-            new_filename: suggestion.expected.filename,
-            reference: suggestion.expected.reference,
-            field: suggestion.expected.field,
-            reason: 'Fuzzy match accepted'
-        });
+        // Add as tentative association
+        state.tentativeAssociations[suggestion.orphan] = {
+            recordIdx: suggestion.recordIdx,
+            field: suggestion.field,
+            suffix: suggestion.suffix,
+            newName: suggestion.expected.filename,
+            oldName: suggestion.orphan
+        };
     });
     
-    // Move to manual matching
-    skipToManual();
+    // Hide suggested section
+    document.getElementById('step3-suggested').classList.add('hidden');
+    
+    // Refresh UI
+    buildDataSheet();
+    renderOrphanedFiles();
 }
 
-// Skip to manual matching
-function skipToManual() {
-    document.getElementById('step3a-container').classList.add('hidden');
-    document.getElementById('step3b-container').classList.remove('hidden');
-    
-    // Build manual matching UI
-    buildManualMatchingUI();
-}
-
-// Build manual matching UI
-async function buildManualMatchingUI() {
-    showLoading('Loading matching interface...');
-    
-    try {
-        const result = await window.pywebview.api.identify_mismatches();
-        
-        if (result.success) {
-            const missingList = document.getElementById('missing-files-list');
-            const orphanedList = document.getElementById('orphaned-files-list');
-            
-            missingList.innerHTML = '';
-            orphanedList.innerHTML = '';
-            
-            // Add missing files
-            result.missing.forEach(item => {
-                const div = document.createElement('div');
-                div.className = 'match-item';
-                div.dataset.filename = item.filename;
-                div.innerHTML = `
-                    <strong>${item.filename}</strong><br>
-                    <small>Record ${item.reference} - ${item.field}</small>
-                `;
-                missingList.appendChild(div);
-            });
-            
-            // Add orphaned files
-            result.orphaned.forEach(filename => {
-                const div = document.createElement('div');
-                div.className = 'match-item';
-                div.dataset.filename = filename;
-                div.innerHTML = `<strong>${filename}</strong>`;
-                div.draggable = true;
-                
-                div.addEventListener('dragstart', (e) => {
-                    draggedElement = e.target;
-                    e.dataTransfer.effectAllowed = 'move';
-                });
-                
-                orphanedList.appendChild(div);
-            });
-        } else {
-            showError('Error identifying mismatches: ' + result.error);
-        }
-    } catch (error) {
-        showError('Error building matching UI: ' + error);
-    } finally {
-        hideLoading();
-    }
-}
+// Helper function for rsplit (like Python)
+String.prototype.rsplit = function(sep, maxsplit) {
+    const split = this.split(sep);
+    return maxsplit ? [split.slice(0, -maxsplit).join(sep)].concat(split.slice(-maxsplit)) : split;
+};
 
 // Show duplicate warning
 function showDuplicateWarning(duplicates) {

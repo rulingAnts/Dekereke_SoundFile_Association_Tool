@@ -87,7 +87,9 @@ class DekeRekeAPI:
             'case_sensitive': self.app_settings.get('case_sensitive', False),
             'suffix_mappings': self.app_settings.get('suffix_mappings', {}),
             'conditional_rules': self.app_settings.get('conditional_rules', {}),
-            'field_groups': self.app_settings.get('field_groups', {})
+            'field_groups': self.app_settings.get('field_groups', {}),
+            'datasheet_filters': self.app_settings.get('datasheet_filters', []),
+            'visible_columns': self.app_settings.get('visible_columns', [])
         }
         
     def select_xml_file(self) -> Optional[str]:
@@ -341,6 +343,172 @@ class DekeRekeAPI:
         """
         self.app_settings['field_groups'] = groups
         self._save_app_settings()
+    
+    def save_datasheet_settings(self, filters: List, visible_columns: List[str]):
+        """
+        Save data sheet settings (filters and visible columns)
+        
+        Args:
+            filters: list of filter conditions
+            visible_columns: list of visible column names
+        """
+        self.app_settings['datasheet_filters'] = filters
+        self.app_settings['visible_columns'] = visible_columns
+        self._save_app_settings()
+    
+    def get_datasheet_data(self) -> Dict[str, Any]:
+        """
+        Get all data needed for Step 3 data sheet view
+        
+        Returns:
+            {
+                'success': bool,
+                'records': list of dicts with all field values,
+                'field_names': list of all fields,
+                'mapped_fields': list of fields with suffix associations,
+                'matched_files': dict mapping (record_idx, field, suffix) to filename,
+                'expected_files': dict mapping (record_idx, field, suffix) to expected filename,
+                'orphaned_files': list of unmatched filenames,
+                'error': str (if failed)
+            }
+        """
+        try:
+            if not self.xml_parser or not self.audio_scanner:
+                return {'success': False, 'error': 'XML or audio folder not loaded'}
+            
+            # Get all records
+            records = []
+            for record in self.xml_parser.records:
+                records.append(dict(record))
+            
+            # Get field names
+            field_names = self.xml_parser.field_names
+            
+            # Get fields with mappings
+            mapped_fields = set()
+            for suffix, fields in self.suffix_mappings.items():
+                mapped_fields.update(fields)
+            
+            # Always include SoundFile if there's an empty suffix mapping
+            if '' in self.suffix_mappings:
+                mapped_fields.add('SoundFile')
+            
+            mapped_fields = sorted(list(mapped_fields))
+            
+            # Build matched files dict: (record_idx, field, suffix) -> filename
+            matched_files = {}
+            expected_files = {}
+            
+            for idx, record in enumerate(self.xml_parser.records):
+                base_filename = record.get('SoundFile', '').strip()
+                if not base_filename:
+                    continue
+                
+                base_name = base_filename.rsplit('.', 1)[0]
+                ext = '.wav'
+                if '.' in base_filename:
+                    ext = '.' + base_filename.rsplit('.', 1)[1]
+                
+                # Check each suffix mapping
+                for suffix, field_names_for_suffix in self.suffix_mappings.items():
+                    for field_name in field_names_for_suffix:
+                        # Generate expected filename
+                        expected_filename = base_name + suffix + ext
+                        
+                        # Check if recording should be expected
+                        if self._should_expect_recording_for_field_or_group(record, field_name):
+                            expected_files[(idx, field_name, suffix)] = expected_filename
+                            
+                            # Check if file exists
+                            if expected_filename in self.audio_scanner.audio_files:
+                                matched_files[(idx, field_name, suffix)] = expected_filename
+                
+                # Also check SoundFile field for empty suffix (whole record)
+                if '' in self.suffix_mappings:
+                    # Empty suffix means the base filename itself
+                    if base_filename in self.audio_scanner.audio_files:
+                        matched_files[(idx, 'SoundFile', '')] = base_filename
+                        expected_files[(idx, 'SoundFile', '')] = base_filename
+                    else:
+                        # Expected but not found
+                        expected_files[(idx, 'SoundFile', '')] = base_filename
+            
+            # Find orphaned files
+            all_matched = set(matched_files.values())
+            orphaned_files = [f for f in self.audio_scanner.audio_files if f not in all_matched]
+            
+            return {
+                'success': True,
+                'records': records,
+                'field_names': field_names,
+                'mapped_fields': mapped_fields,
+                'matched_files': {f"{k[0]}_{k[1]}_{k[2]}": v for k, v in matched_files.items()},
+                'expected_files': {f"{k[0]}_{k[1]}_{k[2]}": v for k, v in expected_files.items()},
+                'orphaned_files': sorted(orphaned_files)
+            }
+            
+        except Exception as e:
+            return {'success': False, 'error': str(e)}
+    
+    def _should_expect_recording_for_field_or_group(self, record: Dict[str, str], field_name: str) -> bool:
+        """
+        Check if recording should be expected for this field/group in this record
+        """
+        # Check if field is in a group
+        group_key = None
+        for group_name, fields in self.app_settings.get('field_groups', {}).items():
+            if field_name in fields:
+                group_key = f"__group__{group_name}"
+                break
+        
+        # Get rules for field or group
+        rules_key = group_key if group_key else field_name
+        rules = self.conditional_rules.get(rules_key, {})
+        
+        if not rules:
+            # No rules = always expect
+            return True
+        
+        # Evaluate conditions
+        return self._evaluate_conditions(record, rules)
+    
+    def _evaluate_conditions(self, record: Dict[str, str], rules: Dict[str, Any]) -> bool:
+        """Evaluate conditional rules for a record"""
+        if not rules or 'conditions' not in rules:
+            return True
+        
+        conditions = rules['conditions']
+        logic_type = rules.get('type', 'AND')
+        
+        results = []
+        for condition in conditions:
+            field = condition.get('field', '')
+            operator = condition.get('operator', '')
+            value = condition.get('value', '')
+            
+            field_value = record.get(field, '').strip()
+            
+            if operator == 'equals':
+                results.append(field_value == value)
+            elif operator == 'not_equals':
+                results.append(field_value != value)
+            elif operator == 'contains':
+                results.append(value.lower() in field_value.lower())
+            elif operator == 'not_empty':
+                results.append(bool(field_value))
+            elif operator == 'empty':
+                results.append(not field_value)
+            elif operator == 'in_list':
+                value_list = condition.get('values', [])
+                results.append(field_value in value_list)
+            elif operator == 'not_in_list':
+                value_list = condition.get('values', [])
+                results.append(field_value not in value_list)
+        
+        if logic_type == 'AND':
+            return all(results) if results else True
+        else:  # OR
+            return any(results) if results else True
     
     def export_mappings(self, mappings: Dict[str, List[str]]) -> Dict[str, Any]:
         """

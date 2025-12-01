@@ -730,6 +730,308 @@ label input[type="checkbox"] {
     color: var(--danger-color);
 }
 
+/* Step 3: Data Sheet Styles */
+.datasheet-controls {
+    display: flex;
+    gap: 0.5rem;
+    margin-bottom: 1rem;
+}
+
+.datasheet-layout {
+    display: grid;
+    grid-template-columns: 1fr 300px;
+    gap: 1rem;
+    height: calc(100vh - 400px);
+    min-height: 500px;
+}
+
+.datasheet-main {
+    background-color: white;
+    border: 1px solid var(--border-color);
+    border-radius: 8px;
+    overflow: hidden;
+}
+
+.datasheet-scroll {
+    width: 100%;
+    height: 100%;
+    overflow: auto;
+    position: relative;
+}
+
+.datasheet-table {
+    width: 100%;
+    border-collapse: separate;
+    border-spacing: 0;
+    font-size: 0.875rem;
+}
+
+.datasheet-table thead {
+    position: sticky;
+    top: 0;
+    z-index: 10;
+    background-color: #f8f9fa;
+}
+
+.datasheet-table th {
+    padding: 0.75rem 0.5rem;
+    text-align: left;
+    font-weight: 600;
+    border-bottom: 2px solid var(--border-color);
+    border-right: 1px solid #e5e7eb;
+    background-color: #f8f9fa;
+    cursor: pointer;
+    user-select: none;
+    white-space: nowrap;
+    position: sticky;
+    top: 0;
+}
+
+.datasheet-table th:hover {
+    background-color: #e5e7eb;
+}
+
+.datasheet-table th.sorted-asc::after {
+    content: ' ▲';
+    color: var(--primary-color);
+}
+
+.datasheet-table th.sorted-desc::after {
+    content: ' ▼';
+    color: var(--primary-color);
+}
+
+.datasheet-table th.frozen-col {
+    position: sticky;
+    left: 0;
+    z-index: 20;
+    background-color: #f8f9fa;
+    box-shadow: 2px 0 4px rgba(0,0,0,0.1);
+}
+
+.datasheet-table td {
+    padding: 0.5rem;
+    border-bottom: 1px solid #e5e7eb;
+    border-right: 1px solid #e5e7eb;
+    cursor: pointer;
+    transition: background-color 0.2s;
+}
+
+.datasheet-table td.frozen-col {
+    position: sticky;
+    left: 0;
+    z-index: 5;
+    background-color: white;
+    font-weight: 500;
+    box-shadow: 2px 0 4px rgba(0,0,0,0.1);
+}
+
+.datasheet-table td:hover {
+    background-color: #f9fafb;
+}
+
+.datasheet-table td.matched {
+    background-color: #dbeafe !important;
+}
+
+.datasheet-table td.matched-tentative {
+    background-color: #bfdbfe !important;
+    font-style: italic;
+}
+
+.datasheet-table td.missing {
+    background-color: #fee2e2 !important;
+}
+
+.datasheet-table td.drop-target {
+    background-color: #fef3c7 !important;
+    border: 2px dashed var(--primary-color);
+}
+
+/* Orphaned Files Pane */
+.orphaned-pane {
+    background-color: white;
+    border: 1px solid var(--border-color);
+    border-radius: 8px;
+    padding: 1rem;
+    display: flex;
+    flex-direction: column;
+}
+
+.orphaned-pane h4 {
+    margin: 0 0 1rem 0;
+    padding-bottom: 0.5rem;
+    border-bottom: 2px solid var(--border-color);
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+}
+
+.count-badge {
+    background-color: var(--primary-color);
+    color: white;
+    padding: 0.125rem 0.5rem;
+    border-radius: 12px;
+    font-size: 0.75rem;
+    font-weight: 600;
+}
+
+.orphaned-list {
+    flex: 1;
+    overflow-y: auto;
+    display: flex;
+    flex-direction: column;
+    gap: 0.5rem;
+}
+
+.orphaned-file-item {
+    padding: 0.5rem;
+    background-color: #f9fafb;
+    border: 1px solid #e5e7eb;
+    border-radius: 4px;
+    cursor: grab;
+    transition: all 0.2s;
+    font-size: 0.875rem;
+}
+
+.orphaned-file-item:hover {
+    background-color: #f3f4f6;
+    border-color: var(--primary-color);
+}
+
+.orphaned-file-item.dragging {
+    opacity: 0.5;
+    cursor: grabbing;
+}
+
+.orphaned-file-item.tentative {
+    opacity: 0.6;
+    background-color: #e5e7eb;
+    color: #6b7280;
+}
+
+.orphaned-file-item .new-name {
+    color: var(--primary-color);
+    font-weight: 500;
+}
+
+.orphaned-file-item .old-name {
+    color: #9ca3af;
+    text-decoration: line-through;
+}
+
+/* Filter Pane */
+.filter-pane {
+    background-color: white;
+    border: 1px solid var(--border-color);
+    border-radius: 8px;
+    padding: 1rem;
+    margin-top: 1rem;
+}
+
+.filter-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    margin-bottom: 1rem;
+    padding-bottom: 0.5rem;
+    border-bottom: 2px solid var(--border-color);
+}
+
+.filter-header h4 {
+    margin: 0;
+}
+
+/* Cell Modal (Speech Balloon) */
+.cell-modal {
+    position: absolute;
+    background-color: white;
+    border: 2px solid var(--primary-color);
+    border-radius: 8px;
+    padding: 1rem;
+    box-shadow: 0 4px 12px rgba(0,0,0,0.15);
+    z-index: 1000;
+    min-width: 250px;
+    max-width: 400px;
+}
+
+.cell-modal::before {
+    content: '';
+    position: absolute;
+    width: 0;
+    height: 0;
+    border-style: solid;
+}
+
+.cell-modal.left::before {
+    right: -10px;
+    top: 20px;
+    border-width: 10px 0 10px 10px;
+    border-color: transparent transparent transparent var(--primary-color);
+}
+
+.cell-modal.right::before {
+    left: -10px;
+    top: 20px;
+    border-width: 10px 10px 10px 0;
+    border-color: transparent var(--primary-color) transparent transparent;
+}
+
+.cell-modal-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    margin-bottom: 0.75rem;
+    padding-bottom: 0.5rem;
+    border-bottom: 1px solid var(--border-color);
+}
+
+.cell-modal-close {
+    background: none;
+    border: none;
+    font-size: 1.25rem;
+    cursor: pointer;
+    color: #6b7280;
+    padding: 0;
+    line-height: 1;
+}
+
+.cell-modal-close:hover {
+    color: var(--text-color);
+}
+
+.cell-modal-files {
+    display: flex;
+    flex-direction: column;
+    gap: 0.5rem;
+}
+
+.cell-modal-file {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 0.5rem;
+    background-color: #f9fafb;
+    border-radius: 4px;
+    font-size: 0.875rem;
+}
+
+.cell-modal-file.tentative {
+    background-color: #dbeafe;
+    border-left: 3px solid var(--primary-color);
+}
+
+.cell-modal-file.missing {
+    background-color: #fee2e2;
+    color: #991b1b;
+}
+
+.cell-modal-file button {
+    padding: 0.25rem 0.5rem;
+    font-size: 0.75rem;
+}
+
+
 .text-success {
     color: var(--success-color);
 }
