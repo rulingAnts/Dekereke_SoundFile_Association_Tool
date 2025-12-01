@@ -86,7 +86,8 @@ class DekeRekeAPI:
             'last_audio_folder': self.app_settings.get('last_audio_folder'),
             'case_sensitive': self.app_settings.get('case_sensitive', False),
             'suffix_mappings': self.app_settings.get('suffix_mappings', {}),
-            'conditional_rules': self.app_settings.get('conditional_rules', {})
+            'conditional_rules': self.app_settings.get('conditional_rules', {}),
+            'field_groups': self.app_settings.get('field_groups', {})
         }
         
     def select_xml_file(self) -> Optional[str]:
@@ -329,6 +330,16 @@ class DekeRekeAPI:
         if self.settings_manager:
             self.settings_manager.settings['conditional_rules'] = rules
             self.settings_manager.save()
+        self._save_app_settings()
+    
+    def save_field_groups(self, groups: Dict[str, List[str]]):
+        """
+        Save field groups
+        
+        Args:
+            groups: dict of group_name -> list of field names
+        """
+        self.app_settings['field_groups'] = groups
         self._save_app_settings()
     
     def export_mappings(self, mappings: Dict[str, List[str]]) -> Dict[str, Any]:

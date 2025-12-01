@@ -12,6 +12,7 @@ const state = {
     fieldNames: [],
     suffixMappings: {},
     conditionalRules: {},
+    fieldGroups: {},  // groupName -> [fieldNames]
     operationQueue: [],
     currentScreen: 'setup'
 };
@@ -50,6 +51,11 @@ async function loadPreviousSettings() {
             // Restore conditional rules
             if (settings.conditional_rules && Object.keys(settings.conditional_rules).length > 0) {
                 state.conditionalRules = settings.conditional_rules;
+            }
+            
+            // Restore field groups
+            if (settings.field_groups && Object.keys(settings.field_groups).length > 0) {
+                state.fieldGroups = settings.field_groups;
             }
             
             // Auto-load last XML if exists
@@ -632,8 +638,43 @@ function buildConditionsUI() {
         return;
     }
     
-    // Create collapsible sections for each field
-    fieldsWithMappings.forEach(field => {
+    // Add group management button
+    const groupManagementDiv = document.createElement('div');
+    groupManagementDiv.className = 'group-management';
+    groupManagementDiv.innerHTML = `
+        <button id="btn-manage-groups" class="btn-secondary">Manage Field Groups</button>
+    `;
+    container.appendChild(groupManagementDiv);
+    
+    document.getElementById('btn-manage-groups').addEventListener('click', () => showGroupManagementDialog(fieldsWithMappings));
+    
+    // Render groups first
+    if (Object.keys(state.fieldGroups).length > 0) {
+        const groupsHeader = document.createElement('h3');
+        groupsHeader.textContent = 'Field Groups';
+        groupsHeader.style.marginTop = '1.5rem';
+        container.appendChild(groupsHeader);
+        
+        for (const groupName in state.fieldGroups) {
+            renderGroupConditions(container, groupName, state.fieldGroups[groupName]);
+        }
+        
+        const individualsHeader = document.createElement('h3');
+        individualsHeader.textContent = 'Individual Fields';
+        individualsHeader.style.marginTop = '1.5rem';
+        container.appendChild(individualsHeader);
+    }
+    
+    // Get fields not in any group
+    const fieldsInGroups = new Set();
+    for (const groupName in state.fieldGroups) {
+        state.fieldGroups[groupName].forEach(field => fieldsInGroups.add(field));
+    }
+    
+    const ungroupedFields = Array.from(fieldsWithMappings).filter(field => !fieldsInGroups.has(field));
+    
+    // Create collapsible sections for each ungrouped field
+    ungroupedFields.forEach(field => {
         const fieldSection = document.createElement('div');
         fieldSection.className = 'condition-field-section';
         
@@ -724,6 +765,219 @@ function getSuffixesForField(field) {
         }
     }
     return suffixes;
+}
+
+// Show group management dialog
+function showGroupManagementDialog(fieldsWithMappings) {
+    const modal = document.createElement('div');
+    modal.className = 'modal';
+    modal.innerHTML = `
+        <div class="modal-content" style="max-width: 600px;">
+            <h3>Manage Field Groups</h3>
+            <div id="groups-list" style="margin-bottom: 1rem;"></div>
+            <div style="margin-top: 1rem;">
+                <h4>Create New Group</h4>
+                <input type="text" id="new-group-name" placeholder="Group name" style="width: 100%; margin-bottom: 0.5rem;">
+                <div id="group-fields-selection" style="max-height: 200px; overflow-y: auto; border: 1px solid #ccc; padding: 0.5rem; margin-bottom: 0.5rem;"></div>
+                <button id="btn-create-group" class="btn-primary">Create Group</button>
+            </div>
+            <div class="button-row" style="margin-top: 1rem;">
+                <button id="btn-close-groups" class="btn-secondary">Close</button>
+            </div>
+        </div>
+    `;
+    
+    document.body.appendChild(modal);
+    
+    // Render existing groups
+    renderGroupsList();
+    
+    // Render field checkboxes
+    const fieldsSelection = document.getElementById('group-fields-selection');
+    Array.from(fieldsWithMappings).sort().forEach(field => {
+        const checkbox = document.createElement('div');
+        checkbox.innerHTML = `
+            <label style="display: block; padding: 0.25rem;">
+                <input type="checkbox" value="${field}" class="group-field-checkbox">
+                ${field}
+            </label>
+        `;
+        fieldsSelection.appendChild(checkbox);
+    });
+    
+    // Create group button
+    document.getElementById('btn-create-group').addEventListener('click', () => {
+        const groupName = document.getElementById('new-group-name').value.trim();
+        if (!groupName) {
+            showError('Please enter a group name');
+            return;
+        }
+        
+        if (state.fieldGroups[groupName]) {
+            showError('A group with this name already exists');
+            return;
+        }
+        
+        const selectedFields = Array.from(document.querySelectorAll('.group-field-checkbox:checked')).map(cb => cb.value);
+        if (selectedFields.length === 0) {
+            showError('Please select at least one field');
+            return;
+        }
+        
+        // Remove fields from other groups
+        for (const otherGroup in state.fieldGroups) {
+            state.fieldGroups[otherGroup] = state.fieldGroups[otherGroup].filter(f => !selectedFields.includes(f));
+            if (state.fieldGroups[otherGroup].length === 0) {
+                delete state.fieldGroups[otherGroup];
+            }
+        }
+        
+        state.fieldGroups[groupName] = selectedFields;
+        saveFieldGroups();
+        
+        document.getElementById('new-group-name').value = '';
+        document.querySelectorAll('.group-field-checkbox').forEach(cb => cb.checked = false);
+        renderGroupsList();
+        
+        showSuccess(`Group "${groupName}" created`);
+    });
+    
+    // Close button
+    document.getElementById('btn-close-groups').addEventListener('click', () => {
+        modal.remove();
+        buildConditionsUI();  // Rebuild to show updated groups
+    });
+}
+
+// Render list of existing groups
+function renderGroupsList() {
+    const groupsList = document.getElementById('groups-list');
+    if (!groupsList) return;
+    
+    groupsList.innerHTML = '';
+    
+    if (Object.keys(state.fieldGroups).length === 0) {
+        groupsList.innerHTML = '<p style="color: #666; font-style: italic;">No groups created yet</p>';
+        return;
+    }
+    
+    for (const groupName in state.fieldGroups) {
+        const groupDiv = document.createElement('div');
+        groupDiv.style.cssText = 'padding: 0.5rem; margin-bottom: 0.5rem; border: 1px solid #ddd; border-radius: 4px; display: flex; justify-content: space-between; align-items: center;';
+        groupDiv.innerHTML = `
+            <div>
+                <strong>${groupName}</strong><br>
+                <small style="color: #666;">${state.fieldGroups[groupName].join(', ')}</small>
+            </div>
+            <button class="btn-danger" data-group="${groupName}">Delete</button>
+        `;
+        
+        groupDiv.querySelector('button').addEventListener('click', (e) => {
+            const group = e.target.dataset.group;
+            if (confirm(`Delete group "${group}"?`)) {
+                delete state.fieldGroups[group];
+                delete state.conditionalRules[`__group__${group}`];
+                saveFieldGroups();
+                renderGroupsList();
+                showSuccess(`Group "${group}" deleted`);
+            }
+        });
+        
+        groupsList.appendChild(groupDiv);
+    }
+}
+
+// Save field groups to backend
+async function saveFieldGroups() {
+    try {
+        await window.pywebview.api.save_field_groups(state.fieldGroups);
+    } catch (error) {
+        console.error('Error saving field groups:', error);
+    }
+}
+
+// Render conditions section for a group
+function renderGroupConditions(container, groupName, fields) {
+    const groupKey = `__group__${groupName}`;
+    
+    const fieldSection = document.createElement('div');
+    fieldSection.className = 'condition-field-section group-section';
+    
+    const header = document.createElement('div');
+    header.className = 'condition-field-header';
+    header.innerHTML = `
+        <span class="toggle-icon">▶</span>
+        <strong>📁 ${groupName}</strong>
+        <span class="field-suffixes">${fields.join(', ')}</span>
+    `;
+    
+    const content = document.createElement('div');
+    content.className = 'condition-field-content hidden';
+    
+    // Default expectation option
+    const defaultOption = document.createElement('div');
+    defaultOption.className = 'condition-option';
+    defaultOption.innerHTML = `
+        <label>
+            <input type="radio" name="expect-${groupKey}" value="always" checked>
+            Always expect recordings for these fields
+        </label>
+    `;
+    content.appendChild(defaultOption);
+    
+    // Only when field is non-empty
+    const nonEmptyOption = document.createElement('div');
+    nonEmptyOption.className = 'condition-option';
+    nonEmptyOption.innerHTML = `
+        <label>
+            <input type="radio" name="expect-${groupKey}" value="non-empty">
+            Only expect when any field in group is non-empty
+        </label>
+    `;
+    content.appendChild(nonEmptyOption);
+    
+    // Custom conditions
+    const customOption = document.createElement('div');
+    customOption.className = 'condition-option';
+    customOption.innerHTML = `
+        <label>
+            <input type="radio" name="expect-${groupKey}" value="custom">
+            Custom conditions
+        </label>
+        <div class="custom-conditions-container hidden" data-field="${groupKey}"></div>
+    `;
+    content.appendChild(customOption);
+    
+    // Toggle collapse/expand
+    header.addEventListener('click', () => {
+        const isHidden = content.classList.contains('hidden');
+        content.classList.toggle('hidden');
+        header.querySelector('.toggle-icon').textContent = isHidden ? '▼' : '▶';
+    });
+    
+    // Show custom conditions builder when selected
+    customOption.querySelector('input[type="radio"]').addEventListener('change', (e) => {
+        if (e.target.checked) {
+            const customContainer = customOption.querySelector('.custom-conditions-container');
+            customContainer.classList.remove('hidden');
+            if (customContainer.children.length === 0) {
+                buildCustomConditionsBuilder(customContainer, groupKey);
+            }
+        }
+    });
+    
+    // Hide custom conditions when other options selected
+    [defaultOption, nonEmptyOption].forEach(option => {
+        option.querySelector('input[type="radio"]').addEventListener('change', (e) => {
+            if (e.target.checked) {
+                customOption.querySelector('.custom-conditions-container').classList.add('hidden');
+            }
+        });
+    });
+    
+    fieldSection.appendChild(header);
+    fieldSection.appendChild(content);
+    container.appendChild(fieldSection);
 }
 
 // Build custom conditions builder with AND/OR logic
@@ -1031,7 +1285,42 @@ async function saveConditions() {
             state.suffixMappings[suffix].forEach(field => fieldsWithMappings.add(field));
         }
         
+        // Process groups
+        for (const groupName in state.fieldGroups) {
+            const groupKey = `__group__${groupName}`;
+            const selectedOption = document.querySelector(`input[name="expect-${groupKey}"]:checked`);
+            if (selectedOption) {
+                const expectationType = selectedOption.value;
+                
+                if (expectationType === 'always') {
+                    delete state.conditionalRules[groupKey];
+                } else if (expectationType === 'non-empty') {
+                    // Create OR condition for any field in group being non-empty
+                    state.conditionalRules[groupKey] = {
+                        type: 'OR',
+                        conditions: state.fieldGroups[groupName].map(field => ({
+                            field: field,
+                            operator: 'not_empty',
+                            value: ''
+                        }))
+                    };
+                }
+                // For 'custom', rules are already in state.conditionalRules[groupKey]
+            }
+        }
+        
+        // Process individual fields
         fieldsWithMappings.forEach(field => {
+            // Skip fields that are in groups
+            let inGroup = false;
+            for (const groupName in state.fieldGroups) {
+                if (state.fieldGroups[groupName].includes(field)) {
+                    inGroup = true;
+                    break;
+                }
+            }
+            if (inGroup) return;
+            
             const selectedOption = document.querySelector(`input[name="expect-${field}"]:checked`);
             if (selectedOption) {
                 const expectationType = selectedOption.value;
