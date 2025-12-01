@@ -278,6 +278,96 @@ class DekeRekeAPI:
             self.settings_manager.settings['conditional_rules'] = rules
             self.settings_manager.save()
     
+    def export_mappings(self, mappings: Dict[str, List[str]]) -> Dict[str, Any]:
+        """
+        Export field-to-suffix mappings to JSON file
+        
+        Args:
+            mappings: dict of suffix -> list of field names
+            
+        Returns:
+            {'success': bool, 'error': str (if failure)}
+        """
+        try:
+            # Open save dialog
+            result = webview.windows[0].create_file_dialog(
+                webview.SAVE_DIALOG,
+                save_filename='dekereke-mappings.json',
+                file_types=('JSON Files (*.json)',)
+            )
+            
+            if not result:
+                return {'success': False, 'error': 'No file selected'}
+            
+            save_path = result
+            
+            # Create export data
+            export_data = {
+                'version': '1.0',
+                'timestamp': datetime.now().isoformat(),
+                'mappings': mappings
+            }
+            
+            # Write to file
+            with open(save_path, 'w', encoding='utf-8') as f:
+                json.dump(export_data, f, indent=2, ensure_ascii=False)
+            
+            return {'success': True, 'path': save_path}
+            
+        except Exception as e:
+            return {'success': False, 'error': f'Error exporting mappings: {str(e)}'}
+    
+    def import_mappings(self) -> Dict[str, Any]:
+        """
+        Import field-to-suffix mappings from JSON file
+        
+        Returns:
+            {
+                'success': bool,
+                'mappings': dict of suffix -> [field_names],
+                'error': str (if failure)
+            }
+        """
+        try:
+            # Open file dialog
+            result = webview.windows[0].create_file_dialog(
+                webview.OPEN_DIALOG,
+                allow_multiple=False,
+                file_types=('JSON Files (*.json)',)
+            )
+            
+            if not result or len(result) == 0:
+                return {'success': False, 'error': 'No file selected'}
+            
+            import_path = result[0]
+            
+            # Read and parse JSON
+            with open(import_path, 'r', encoding='utf-8') as f:
+                import_data = json.load(f)
+            
+            # Validate structure
+            if 'mappings' not in import_data or not isinstance(import_data['mappings'], dict):
+                return {'success': False, 'error': 'Invalid mapping file format'}
+            
+            mappings = import_data['mappings']
+            
+            # Update state
+            self.suffix_mappings = mappings
+            if self.settings_manager:
+                self.settings_manager.settings['suffix_mappings'] = mappings
+                self.settings_manager.save()
+            
+            return {
+                'success': True,
+                'mappings': mappings,
+                'count': len(mappings)
+            }
+            
+        except json.JSONDecodeError as e:
+            return {'success': False, 'error': f'Invalid JSON format: {str(e)}'}
+        except Exception as e:
+            return {'success': False, 'error': f'Error importing mappings: {str(e)}'}
+    
     def get_settings(self) -> Dict[str, Any]:
         """Get current settings"""
         if self.settings_manager:
@@ -447,6 +537,41 @@ class DekeRekeAPI:
             return {
                 'success': True,
                 'message': f'Backup created at {backup_folder}'
+            }
+            
+        except Exception as e:
+            return {'success': False, 'error': str(e)}
+    
+    def create_backup_with_dialog(self) -> Dict[str, Any]:
+        """Create backup of audio folder with folder selection dialog"""
+        try:
+            if not self.audio_folder:
+                return {'success': False, 'error': 'No audio folder selected'}
+            
+            if not os.path.exists(self.audio_folder):
+                return {'success': False, 'error': 'Audio folder does not exist'}
+            
+            # Open folder dialog for backup location
+            result = webview.windows[0].create_file_dialog(
+                webview.FOLDER_DIALOG
+            )
+            
+            if not result or len(result) == 0:
+                return {'success': False, 'error': 'No folder selected'}
+            
+            backup_parent = result[0]
+            
+            # Create timestamped backup folder name
+            audio_folder_name = os.path.basename(self.audio_folder)
+            timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
+            backup_folder = os.path.join(backup_parent, f'{audio_folder_name}_backup_{timestamp}')
+            
+            # Copy entire audio folder
+            shutil.copytree(self.audio_folder, backup_folder)
+            
+            return {
+                'success': True,
+                'backup_path': backup_folder
             }
             
         except Exception as e:

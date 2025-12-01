@@ -98,6 +98,8 @@
 
                 <div class="button-row">
                     <button id="btn-load-dekereke-settings" class="btn-secondary">Load from Dekereke Settings</button>
+                    <button id="btn-import-mappings" class="btn-secondary">Import Mappings</button>
+                    <button id="btn-export-mappings" class="btn-secondary">Export Mappings</button>
                 </div>
 
                 <div class="mapping-container">
@@ -120,18 +122,13 @@
             <!-- Step 2: Conditional Expectations -->
             <section id="step2-screen" class="screen">
                 <h2>Step 2: Conditional Expectations</h2>
-                <p>Define when recordings are expected for each field.</p>
+                <p>Define when recordings are expected for each field with mapped suffixes.</p>
                 
-                <div class="global-setting">
-                    <h3>Global Setting</h3>
-                    <label>
-                        <input type="checkbox" id="include-empty-fields" checked>
-                        Expect recordings even for empty fields
-                    </label>
-                    <p class="help-text">Users often record before transcribing, so empty fields may still have audio.</p>
+                <div class="info-box">
+                    <p><strong>Tip:</strong> Create rules to only expect recordings when certain conditions are met. For example, only expect incompletive aspect recordings for verbs.</p>
                 </div>
 
-                <div id="conditions-container"></div>
+                <div id="conditions-container" class="conditions-tree"></div>
 
                 <div class="button-row">
                     <button id="btn-save-conditions" class="btn-primary">Save Conditions</button>

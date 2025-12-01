@@ -57,8 +57,13 @@ function setupEventListeners() {
 
     // Step 1
     document.getElementById('btn-load-dekereke-settings').addEventListener('click', loadDekeRekeSettings);
+    document.getElementById('btn-import-mappings').addEventListener('click', importMappings);
+    document.getElementById('btn-export-mappings').addEventListener('click', exportMappings);
     document.getElementById('btn-save-mappings').addEventListener('click', saveMappings);
-    document.getElementById('btn-proceed-to-step2').addEventListener('click', () => showScreen('step2'));
+    document.getElementById('btn-proceed-to-step2').addEventListener('click', () => {
+        showScreen('step2');
+        buildConditionsUI();
+    });
 
     // Step 2
     document.getElementById('btn-save-conditions').addEventListener('click', saveConditions);
@@ -424,6 +429,57 @@ async function loadDekeRekeSettings() {
     }
 }
 
+// Export mappings to JSON file
+async function exportMappings() {
+    showLoading('Exporting mappings...');
+    
+    try {
+        if (Object.keys(state.suffixMappings).length === 0) {
+            showError('No mappings to export');
+            return;
+        }
+        
+        const result = await window.pywebview.api.export_mappings(state.suffixMappings);
+        
+        if (result.success) {
+            showSuccess('Mappings exported successfully');
+        } else {
+            showError(result.error || 'Failed to export mappings');
+        }
+    } catch (error) {
+        showError('Error exporting mappings: ' + error.message);
+    } finally {
+        hideLoading();
+    }
+}
+
+// Import mappings from JSON file
+async function importMappings() {
+    showLoading('Importing mappings...');
+    
+    try {
+        const result = await window.pywebview.api.import_mappings();
+        
+        if (result.success) {
+            // Update state with imported mappings
+            state.suffixMappings = result.mappings;
+            
+            // Refresh UI from state
+            refreshMappingTiles();
+            
+            showSuccess(`Imported ${result.count} suffix mappings`);
+        } else {
+            if (result.error !== 'No file selected') {
+                showError(result.error || 'Failed to import mappings');
+            }
+        }
+    } catch (error) {
+        showError('Error importing mappings: ' + error.message);
+    } finally {
+        hideLoading();
+    }
+}
+
 // Save mappings
 async function saveMappings() {
     showLoading('Saving mappings...');
@@ -443,13 +499,310 @@ async function saveMappings() {
     }
 }
 
+// Build conditions UI for Step 2
+function buildConditionsUI() {
+    const container = document.getElementById('conditions-container');
+    container.innerHTML = '';
+    
+    // Get all fields that have suffix mappings
+    const fieldsWithMappings = new Set();
+    for (const suffix in state.suffixMappings) {
+        const fields = state.suffixMappings[suffix];
+        fields.forEach(field => fieldsWithMappings.add(field));
+    }
+    
+    if (fieldsWithMappings.size === 0) {
+        container.innerHTML = '<p class="help-text">No field mappings defined. Please complete Step 1 first.</p>';
+        return;
+    }
+    
+    // Create collapsible sections for each field
+    fieldsWithMappings.forEach(field => {
+        const fieldSection = document.createElement('div');
+        fieldSection.className = 'condition-field-section';
+        
+        const header = document.createElement('div');
+        header.className = 'condition-field-header';
+        header.innerHTML = `
+            <span class="toggle-icon">▶</span>
+            <strong>${field}</strong>
+            <span class="field-suffixes">${getSuffixesForField(field).join(', ')}</span>
+        `;
+        
+        const content = document.createElement('div');
+        content.className = 'condition-field-content hidden';
+        
+        // Default expectation option
+        const defaultOption = document.createElement('div');
+        defaultOption.className = 'condition-option';
+        defaultOption.innerHTML = `
+            <label>
+                <input type="radio" name="expect-${field}" value="always" checked>
+                Always expect recordings for this field
+            </label>
+        `;
+        content.appendChild(defaultOption);
+        
+        // Only when field is non-empty
+        const nonEmptyOption = document.createElement('div');
+        nonEmptyOption.className = 'condition-option';
+        nonEmptyOption.innerHTML = `
+            <label>
+                <input type="radio" name="expect-${field}" value="non-empty">
+                Only expect when <strong>${field}</strong> field is non-empty
+            </label>
+        `;
+        content.appendChild(nonEmptyOption);
+        
+        // Custom conditions
+        const customOption = document.createElement('div');
+        customOption.className = 'condition-option';
+        customOption.innerHTML = `
+            <label>
+                <input type="radio" name="expect-${field}" value="custom">
+                Custom conditions
+            </label>
+            <div class="custom-conditions-container hidden" data-field="${field}"></div>
+        `;
+        content.appendChild(customOption);
+        
+        // Toggle collapse/expand
+        header.addEventListener('click', () => {
+            const isHidden = content.classList.contains('hidden');
+            content.classList.toggle('hidden');
+            header.querySelector('.toggle-icon').textContent = isHidden ? '▼' : '▶';
+        });
+        
+        // Show custom conditions builder when selected
+        customOption.querySelector('input[type="radio"]').addEventListener('change', (e) => {
+            if (e.target.checked) {
+                const customContainer = customOption.querySelector('.custom-conditions-container');
+                customContainer.classList.remove('hidden');
+                if (customContainer.children.length === 0) {
+                    buildCustomConditionsBuilder(customContainer, field);
+                }
+            }
+        });
+        
+        // Hide custom conditions when other options selected
+        [defaultOption, nonEmptyOption].forEach(option => {
+            option.querySelector('input[type="radio"]').addEventListener('change', (e) => {
+                if (e.target.checked) {
+                    customOption.querySelector('.custom-conditions-container').classList.add('hidden');
+                }
+            });
+        });
+        
+        fieldSection.appendChild(header);
+        fieldSection.appendChild(content);
+        container.appendChild(fieldSection);
+    });
+}
+
+// Get suffixes mapped to a field
+function getSuffixesForField(field) {
+    const suffixes = [];
+    for (const suffix in state.suffixMappings) {
+        if (state.suffixMappings[suffix].includes(field)) {
+            suffixes.push(suffix || '(no suffix)');
+        }
+    }
+    return suffixes;
+}
+
+// Build custom conditions builder with AND/OR logic
+function buildCustomConditionsBuilder(container, targetField) {
+    container.innerHTML = '';
+    
+    // Initialize rules if not exists
+    if (!state.conditionalRules[targetField]) {
+        state.conditionalRules[targetField] = {
+            type: 'AND',
+            conditions: []
+        };
+    }
+    
+    const rulesGroup = state.conditionalRules[targetField];
+    
+    // Group type selector (AND/OR)
+    const groupTypeDiv = document.createElement('div');
+    groupTypeDiv.className = 'condition-group-type';
+    groupTypeDiv.innerHTML = `
+        <label>Expect when 
+            <select class="group-logic-selector">
+                <option value="AND" ${rulesGroup.type === 'AND' ? 'selected' : ''}>ALL</option>
+                <option value="OR" ${rulesGroup.type === 'OR' ? 'selected' : ''}>ANY</option>
+            </select>
+            of these conditions are true:
+        </label>
+    `;
+    
+    groupTypeDiv.querySelector('select').addEventListener('change', (e) => {
+        state.conditionalRules[targetField].type = e.target.value;
+    });
+    
+    container.appendChild(groupTypeDiv);
+    
+    // Conditions list
+    const conditionsList = document.createElement('div');
+    conditionsList.className = 'conditions-list';
+    container.appendChild(conditionsList);
+    
+    // Render existing conditions
+    renderConditions(conditionsList, targetField);
+    
+    // Add condition button
+    const addBtn = document.createElement('button');
+    addBtn.className = 'btn-secondary btn-small';
+    addBtn.textContent = '+ Add Condition';
+    addBtn.type = 'button';
+    addBtn.addEventListener('click', () => {
+        addCondition(targetField);
+        renderConditions(conditionsList, targetField);
+    });
+    container.appendChild(addBtn);
+}
+
+// Render conditions in the list
+function renderConditions(container, targetField) {
+    container.innerHTML = '';
+    
+    const rules = state.conditionalRules[targetField];
+    if (!rules || !rules.conditions) return;
+    
+    rules.conditions.forEach((condition, index) => {
+        const conditionDiv = document.createElement('div');
+        conditionDiv.className = 'condition-rule';
+        
+        // Field selector
+        const fieldSelect = document.createElement('select');
+        fieldSelect.className = 'condition-field-select';
+        fieldSelect.innerHTML = '<option value="">Select field...</option>';
+        state.fieldNames.forEach(field => {
+            const option = document.createElement('option');
+            option.value = field;
+            option.textContent = field;
+            if (condition.field === field) option.selected = true;
+            fieldSelect.appendChild(option);
+        });
+        
+        // Operator selector
+        const operatorSelect = document.createElement('select');
+        operatorSelect.className = 'condition-operator-select';
+        operatorSelect.innerHTML = `
+            <option value="equals" ${condition.operator === 'equals' ? 'selected' : ''}>equals</option>
+            <option value="not_equals" ${condition.operator === 'not_equals' ? 'selected' : ''}>does not equal</option>
+            <option value="contains" ${condition.operator === 'contains' ? 'selected' : ''}>contains</option>
+            <option value="not_empty" ${condition.operator === 'not_empty' ? 'selected' : ''}>is not empty</option>
+            <option value="empty" ${condition.operator === 'empty' ? 'selected' : ''}>is empty</option>
+        `;
+        
+        // Value input
+        const valueInput = document.createElement('input');
+        valueInput.type = 'text';
+        valueInput.className = 'condition-value-input';
+        valueInput.value = condition.value || '';
+        valueInput.placeholder = 'value';
+        
+        // Show/hide value input based on operator
+        const updateValueVisibility = () => {
+            const needsValue = !['not_empty', 'empty'].includes(operatorSelect.value);
+            valueInput.style.display = needsValue ? 'inline-block' : 'none';
+        };
+        updateValueVisibility();
+        
+        // Remove button
+        const removeBtn = document.createElement('button');
+        removeBtn.className = 'btn-danger btn-small';
+        removeBtn.textContent = '✕';
+        removeBtn.type = 'button';
+        removeBtn.addEventListener('click', () => {
+            removeCondition(targetField, index);
+            renderConditions(container, targetField);
+        });
+        
+        // Update condition on change
+        fieldSelect.addEventListener('change', (e) => {
+            condition.field = e.target.value;
+        });
+        
+        operatorSelect.addEventListener('change', (e) => {
+            condition.operator = e.target.value;
+            updateValueVisibility();
+        });
+        
+        valueInput.addEventListener('input', (e) => {
+            condition.value = e.target.value;
+        });
+        
+        conditionDiv.appendChild(fieldSelect);
+        conditionDiv.appendChild(document.createTextNode(' '));
+        conditionDiv.appendChild(operatorSelect);
+        conditionDiv.appendChild(document.createTextNode(' '));
+        conditionDiv.appendChild(valueInput);
+        conditionDiv.appendChild(document.createTextNode(' '));
+        conditionDiv.appendChild(removeBtn);
+        
+        container.appendChild(conditionDiv);
+    });
+}
+
+// Add a new condition
+function addCondition(targetField) {
+    if (!state.conditionalRules[targetField]) {
+        state.conditionalRules[targetField] = {
+            type: 'AND',
+            conditions: []
+        };
+    }
+    
+    state.conditionalRules[targetField].conditions.push({
+        field: '',
+        operator: 'equals',
+        value: ''
+    });
+}
+
+// Remove a condition
+function removeCondition(targetField, index) {
+    if (state.conditionalRules[targetField] && state.conditionalRules[targetField].conditions) {
+        state.conditionalRules[targetField].conditions.splice(index, 1);
+    }
+}
+
 // Save conditions
 async function saveConditions() {
     showLoading('Saving conditions...');
     
     try {
-        // Get global setting
-        const includeEmpty = document.getElementById('include-empty-fields').checked;
+        // Collect expectation settings for each field
+        const fieldsWithMappings = new Set();
+        for (const suffix in state.suffixMappings) {
+            state.suffixMappings[suffix].forEach(field => fieldsWithMappings.add(field));
+        }
+        
+        fieldsWithMappings.forEach(field => {
+            const selectedOption = document.querySelector(`input[name="expect-${field}"]:checked`);
+            if (selectedOption) {
+                const expectationType = selectedOption.value;
+                
+                if (expectationType === 'always') {
+                    // Always expect - remove any custom rules
+                    delete state.conditionalRules[field];
+                } else if (expectationType === 'non-empty') {
+                    // Only expect when field is non-empty
+                    state.conditionalRules[field] = {
+                        type: 'AND',
+                        conditions: [{
+                            field: field,
+                            operator: 'not_empty',
+                            value: ''
+                        }]
+                    };
+                }
+                // For 'custom', rules are already in state.conditionalRules[field]
+            }
+        });
         
         await window.pywebview.api.save_conditional_rules(state.conditionalRules);
         
@@ -615,14 +968,22 @@ function showBackupWarning() {
 
 // Create backup
 async function createBackup() {
-    // This would open a folder dialog for backup location
     showLoading('Creating backup...');
     
     try {
-        // For now, just proceed
+        const result = await window.pywebview.api.create_backup_with_dialog();
+        
         hideLoading();
-        document.getElementById('modal-overlay').classList.add('hidden');
-        executeOperations();
+        
+        if (result.success) {
+            showSuccess('Backup created successfully at: ' + result.backup_path);
+            document.getElementById('modal-overlay').classList.add('hidden');
+            executeOperations();
+        } else {
+            if (result.error !== 'No folder selected') {
+                showError('Error creating backup: ' + result.error);
+            }
+        }
     } catch (error) {
         showError('Error creating backup: ' + error);
         hideLoading();
