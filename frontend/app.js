@@ -23,9 +23,102 @@ window.addEventListener('pywebviewready', function() {
 });
 
 // Initialize application
-function initializeApp() {
+async function initializeApp() {
     setupEventListeners();
+    await loadPreviousSettings();
     showScreen('setup');
+}
+
+// Load previous settings from backend
+async function loadPreviousSettings() {
+    try {
+        const settings = await window.pywebview.api.get_initial_settings();
+        
+        if (settings) {
+            // Restore case sensitivity
+            if (settings.case_sensitive !== undefined) {
+                state.caseSensitive = settings.case_sensitive;
+                const radio = document.querySelector(`input[name="case-sensitive"][value="${settings.case_sensitive}"]`);
+                if (radio) radio.checked = true;
+            }
+            
+            // Restore suffix mappings
+            if (settings.suffix_mappings && Object.keys(settings.suffix_mappings).length > 0) {
+                state.suffixMappings = settings.suffix_mappings;
+            }
+            
+            // Restore conditional rules
+            if (settings.conditional_rules && Object.keys(settings.conditional_rules).length > 0) {
+                state.conditionalRules = settings.conditional_rules;
+            }
+            
+            // Auto-load last XML if exists
+            if (settings.last_xml_path) {
+                await autoLoadXML(settings.last_xml_path);
+            }
+            
+            // Auto-load last audio folder if exists
+            if (settings.last_audio_folder) {
+                await autoLoadAudioFolder(settings.last_audio_folder);
+            }
+            
+            // If we have mappings loaded, refresh the tiles display
+            if (Object.keys(state.suffixMappings).length > 0) {
+                refreshMappingTiles();
+            }
+        }
+    } catch (error) {
+        console.error('Error loading previous settings:', error);
+    }
+}
+
+// Auto-load XML file from previous session
+async function autoLoadXML(xmlPath) {
+    try {
+        const result = await window.pywebview.api.parse_xml(xmlPath);
+        
+        if (result.success) {
+            state.xmlPath = xmlPath;
+            state.fieldNames = result.field_names;
+            
+            document.getElementById('xml-info').classList.remove('hidden');
+            document.getElementById('xml-path').textContent = xmlPath;
+            document.getElementById('xml-record-count').textContent = result.record_count;
+            document.getElementById('xml-status').textContent = `XML: ${result.record_count} records`;
+            
+            if (Object.keys(result.duplicates).length > 0) {
+                showDuplicateWarning(result.duplicates);
+            }
+            
+            if (result.empty_soundfiles.length > 0) {
+                showEmptySoundFileWarning(result.empty_soundfiles);
+            }
+            
+            checkReadyForStep1();
+        }
+    } catch (error) {
+        console.error('Error auto-loading XML:', error);
+    }
+}
+
+// Auto-load audio folder from previous session
+async function autoLoadAudioFolder(audioFolder) {
+    try {
+        const result = await window.pywebview.api.scan_audio_folder(audioFolder);
+        
+        if (result.success) {
+            state.audioFolder = audioFolder;
+            
+            document.getElementById('audio-info').classList.remove('hidden');
+            document.getElementById('audio-path').textContent = audioFolder;
+            document.getElementById('audio-file-count').textContent = result.file_count;
+            document.getElementById('audio-status').textContent = `Audio: ${result.file_count} files`;
+            
+            checkReadyForStep1();
+        }
+    } catch (error) {
+        console.error('Error auto-loading audio folder:', error);
+    }
 }
 
 // Setup event listeners
@@ -66,6 +159,8 @@ function setupEventListeners() {
     });
 
     // Step 2
+    document.getElementById('btn-import-conditions').addEventListener('click', importConditions);
+    document.getElementById('btn-export-conditions').addEventListener('click', exportConditions);
     document.getElementById('btn-save-conditions').addEventListener('click', saveConditions);
     document.getElementById('btn-proceed-to-step3').addEventListener('click', () => showScreen('step3'));
 
@@ -482,6 +577,27 @@ async function importMappings() {
 
 // Save mappings
 async function saveMappings() {
+    // Check for unmapped suffixes
+    const unmappedSuffixes = [];
+    for (const suffix in state.suffixes) {
+        if (!state.suffixMappings[suffix] || state.suffixMappings[suffix].length === 0) {
+            unmappedSuffixes.push(suffix || '(no suffix)');
+        }
+    }
+    
+    if (unmappedSuffixes.length > 0) {
+        const confirmed = confirm(
+            `⚠️ Warning: ${unmappedSuffixes.length} suffix(es) are not mapped to any field:\n\n` +
+            unmappedSuffixes.join(', ') +
+            `\n\nAll audio files with these suffixes will be treated as orphans and may be flagged as unexpected files.\n\n` +
+            `Do you want to continue anyway?`
+        );
+        
+        if (!confirmed) {
+            return;
+        }
+    }
+    
     showLoading('Saving mappings...');
     
     try {
@@ -695,21 +811,36 @@ function renderConditions(container, targetField) {
             <option value="contains" ${condition.operator === 'contains' ? 'selected' : ''}>contains</option>
             <option value="not_empty" ${condition.operator === 'not_empty' ? 'selected' : ''}>is not empty</option>
             <option value="empty" ${condition.operator === 'empty' ? 'selected' : ''}>is empty</option>
+            <option value="in_list" ${condition.operator === 'in_list' ? 'selected' : ''}>is in list</option>
+            <option value="not_in_list" ${condition.operator === 'not_in_list' ? 'selected' : ''}>is not in list</option>
         `;
         
-        // Value input
+        // Value input (text)
         const valueInput = document.createElement('input');
         valueInput.type = 'text';
         valueInput.className = 'condition-value-input';
         valueInput.value = condition.value || '';
         valueInput.placeholder = 'value';
         
-        // Show/hide value input based on operator
-        const updateValueVisibility = () => {
-            const needsValue = !['not_empty', 'empty'].includes(operatorSelect.value);
-            valueInput.style.display = needsValue ? 'inline-block' : 'none';
+        // Multi-select for in_list/not_in_list
+        const multiSelectContainer = document.createElement('div');
+        multiSelectContainer.className = 'condition-multiselect-container';
+        multiSelectContainer.style.display = 'none';
+        
+        // Show/hide appropriate input based on operator
+        const updateInputVisibility = async () => {
+            const operator = operatorSelect.value;
+            const needsTextValue = !['not_empty', 'empty', 'in_list', 'not_in_list'].includes(operator);
+            const needsListValue = ['in_list', 'not_in_list'].includes(operator);
+            
+            valueInput.style.display = needsTextValue ? 'inline-block' : 'none';
+            multiSelectContainer.style.display = needsListValue ? 'block' : 'none';
+            
+            if (needsListValue && multiSelectContainer.children.length === 0) {
+                await buildMultiSelect(multiSelectContainer, fieldSelect.value, condition);
+            }
         };
-        updateValueVisibility();
+        updateInputVisibility();
         
         // Remove button
         const removeBtn = document.createElement('button');
@@ -722,13 +853,18 @@ function renderConditions(container, targetField) {
         });
         
         // Update condition on change
-        fieldSelect.addEventListener('change', (e) => {
+        fieldSelect.addEventListener('change', async (e) => {
             condition.field = e.target.value;
+            // Rebuild multiselect if operator is in_list/not_in_list
+            if (['in_list', 'not_in_list'].includes(operatorSelect.value)) {
+                multiSelectContainer.innerHTML = '';
+                await buildMultiSelect(multiSelectContainer, e.target.value, condition);
+            }
         });
         
-        operatorSelect.addEventListener('change', (e) => {
+        operatorSelect.addEventListener('change', async (e) => {
             condition.operator = e.target.value;
-            updateValueVisibility();
+            await updateInputVisibility();
         });
         
         valueInput.addEventListener('input', (e) => {
@@ -740,11 +876,74 @@ function renderConditions(container, targetField) {
         conditionDiv.appendChild(operatorSelect);
         conditionDiv.appendChild(document.createTextNode(' '));
         conditionDiv.appendChild(valueInput);
+        conditionDiv.appendChild(multiSelectContainer);
         conditionDiv.appendChild(document.createTextNode(' '));
         conditionDiv.appendChild(removeBtn);
         
         container.appendChild(conditionDiv);
     });
+}
+
+// Build multi-select for in_list/not_in_list operators
+async function buildMultiSelect(container, fieldName, condition) {
+    if (!fieldName) {
+        container.innerHTML = '<p class="help-text">Select a field first</p>';
+        return;
+    }
+    
+    try {
+        // Get unique values for this field from the backend
+        const result = await window.pywebview.api.get_field_values(fieldName);
+        
+        if (!result.success || !result.values || result.values.length === 0) {
+            container.innerHTML = '<p class="help-text">No values found for this field</p>';
+            return;
+        }
+        
+        // Parse existing selected values
+        let selectedValues = [];
+        if (condition.value) {
+            try {
+                selectedValues = JSON.parse(condition.value);
+                if (!Array.isArray(selectedValues)) {
+                    selectedValues = [condition.value];
+                }
+            } catch {
+                selectedValues = [condition.value];
+            }
+        }
+        
+        // Create checkbox list
+        container.innerHTML = '';
+        const checkboxList = document.createElement('div');
+        checkboxList.className = 'checkbox-list';
+        
+        result.values.forEach(value => {
+            const label = document.createElement('label');
+            label.className = 'checkbox-label';
+            
+            const checkbox = document.createElement('input');
+            checkbox.type = 'checkbox';
+            checkbox.value = value;
+            checkbox.checked = selectedValues.includes(value);
+            
+            checkbox.addEventListener('change', () => {
+                // Update condition value with selected items
+                const selected = Array.from(checkboxList.querySelectorAll('input[type="checkbox"]:checked'))
+                    .map(cb => cb.value);
+                condition.value = JSON.stringify(selected);
+            });
+            
+            label.appendChild(checkbox);
+            label.appendChild(document.createTextNode(' ' + value));
+            checkboxList.appendChild(label);
+        });
+        
+        container.appendChild(checkboxList);
+        
+    } catch (error) {
+        container.innerHTML = `<p class="help-text">Error loading values: ${error.message}</p>`;
+    }
 }
 
 // Add a new condition
@@ -767,6 +966,57 @@ function addCondition(targetField) {
 function removeCondition(targetField, index) {
     if (state.conditionalRules[targetField] && state.conditionalRules[targetField].conditions) {
         state.conditionalRules[targetField].conditions.splice(index, 1);
+    }
+}
+
+// Export conditions to JSON file
+async function exportConditions() {
+    showLoading('Exporting conditions...');
+    
+    try {
+        if (Object.keys(state.conditionalRules).length === 0) {
+            showError('No conditions to export');
+            return;
+        }
+        
+        const result = await window.pywebview.api.export_conditions(state.conditionalRules);
+        
+        if (result.success) {
+            showSuccess('Conditions exported successfully');
+        } else {
+            showError(result.error || 'Failed to export conditions');
+        }
+    } catch (error) {
+        showError('Error exporting conditions: ' + error.message);
+    } finally {
+        hideLoading();
+    }
+}
+
+// Import conditions from JSON file
+async function importConditions() {
+    showLoading('Importing conditions...');
+    
+    try {
+        const result = await window.pywebview.api.import_conditions();
+        
+        if (result.success) {
+            // Update state with imported conditions
+            state.conditionalRules = result.conditions;
+            
+            // Rebuild UI to show imported conditions
+            buildConditionsUI();
+            
+            showSuccess(`Imported ${result.count} conditional rule(s)`);
+        } else {
+            if (result.error !== 'No file selected') {
+                showError(result.error || 'Failed to import conditions');
+            }
+        }
+    } catch (error) {
+        showError('Error importing conditions: ' + error.message);
+    } finally {
+        hideLoading();
     }
 }
 

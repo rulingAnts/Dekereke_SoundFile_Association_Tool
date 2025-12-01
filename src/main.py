@@ -41,6 +41,54 @@ class DekeRekeAPI:
         # Cache empty soundfile info
         self.empty_soundfile_indices = []
         
+        # App-level settings file
+        self.app_settings_path = os.path.join(os.path.expanduser('~'), '.dekereke_app_settings.json')
+        self.app_settings = self._load_app_settings()
+    
+    def _load_app_settings(self) -> Dict[str, Any]:
+        """Load app-level settings from user's home directory"""
+        defaults = {
+            'last_xml_path': None,
+            'last_audio_folder': None,
+            'case_sensitive': False,
+            'suffix_mappings': {},
+            'conditional_rules': {}
+        }
+        
+        try:
+            if os.path.exists(self.app_settings_path):
+                with open(self.app_settings_path, 'r', encoding='utf-8') as f:
+                    loaded = json.load(f)
+                    defaults.update(loaded)
+        except Exception as e:
+            print(f"Error loading app settings: {e}")
+        
+        return defaults
+    
+    def _save_app_settings(self):
+        """Save app-level settings to user's home directory"""
+        try:
+            self.app_settings['last_xml_path'] = self.xml_path
+            self.app_settings['last_audio_folder'] = self.audio_folder
+            self.app_settings['case_sensitive'] = self.case_sensitive
+            self.app_settings['suffix_mappings'] = self.suffix_mappings
+            self.app_settings['conditional_rules'] = self.conditional_rules
+            
+            with open(self.app_settings_path, 'w', encoding='utf-8') as f:
+                json.dump(self.app_settings, f, indent=2, ensure_ascii=False)
+        except Exception as e:
+            print(f"Error saving app settings: {e}")
+    
+    def get_initial_settings(self) -> Dict[str, Any]:
+        """Get initial settings to populate UI on startup"""
+        return {
+            'last_xml_path': self.app_settings.get('last_xml_path'),
+            'last_audio_folder': self.app_settings.get('last_audio_folder'),
+            'case_sensitive': self.app_settings.get('case_sensitive', False),
+            'suffix_mappings': self.app_settings.get('suffix_mappings', {}),
+            'conditional_rules': self.app_settings.get('conditional_rules', {})
+        }
+        
     def select_xml_file(self) -> Optional[str]:
         """Open file dialog to select XML file"""
         result = webview.windows[0].create_file_dialog(
@@ -51,6 +99,7 @@ class DekeRekeAPI:
         
         if result and len(result) > 0:
             self.xml_path = result[0]
+            self._save_app_settings()
             return self.xml_path
         return None
     
@@ -62,6 +111,7 @@ class DekeRekeAPI:
         
         if result and len(result) > 0:
             self.audio_folder = result[0]
+            self._save_app_settings()
             return self.audio_folder
         return None
     
@@ -109,8 +159,9 @@ class DekeRekeAPI:
             return {'success': False, 'error': str(e)}
     
     def set_case_sensitivity(self, case_sensitive: bool):
-        """Set case sensitivity for file matching"""
+        """Set case sensitivity for matching"""
         self.case_sensitive = case_sensitive
+        self._save_app_settings()
         if self.settings_manager:
             self.settings_manager.settings['case_sensitive'] = case_sensitive
             self.settings_manager.save()
@@ -194,6 +245,7 @@ class DekeRekeAPI:
         if self.settings_manager:
             self.settings_manager.settings['suffix_mappings'] = mappings
             self.settings_manager.save()
+        self._save_app_settings()
     
     def load_dekereke_settings(self) -> Dict[str, Any]:
         """
@@ -277,6 +329,7 @@ class DekeRekeAPI:
         if self.settings_manager:
             self.settings_manager.settings['conditional_rules'] = rules
             self.settings_manager.save()
+        self._save_app_settings()
     
     def export_mappings(self, mappings: Dict[str, List[str]]) -> Dict[str, Any]:
         """
@@ -373,6 +426,134 @@ class DekeRekeAPI:
         if self.settings_manager:
             return self.settings_manager.settings
         return {}
+    
+    def export_conditions(self, conditions: Dict[str, Any]) -> Dict[str, Any]:
+        """
+        Export conditional rules to JSON file
+        
+        Args:
+            conditions: dict of field_name -> rule definition
+            
+        Returns:
+            {'success': bool, 'error': str (if failure)}
+        """
+        try:
+            # Open save dialog
+            result = webview.windows[0].create_file_dialog(
+                webview.SAVE_DIALOG,
+                save_filename='dekereke-conditions.json',
+                file_types=('JSON Files (*.json)',)
+            )
+            
+            if not result:
+                return {'success': False, 'error': 'No file selected'}
+            
+            save_path = result
+            
+            # Create export data
+            export_data = {
+                'version': '1.0',
+                'timestamp': datetime.now().isoformat(),
+                'conditions': conditions
+            }
+            
+            # Write to file
+            with open(save_path, 'w', encoding='utf-8') as f:
+                json.dump(export_data, f, indent=2, ensure_ascii=False)
+            
+            return {'success': True, 'path': save_path}
+            
+        except Exception as e:
+            return {'success': False, 'error': f'Error exporting conditions: {str(e)}'}
+    
+    def import_conditions(self) -> Dict[str, Any]:
+        """
+        Import conditional rules from JSON file
+        
+        Returns:
+            {
+                'success': bool,
+                'conditions': dict of field_name -> rule definition,
+                'error': str (if failure)
+            }
+        """
+        try:
+            # Open file dialog
+            result = webview.windows[0].create_file_dialog(
+                webview.OPEN_DIALOG,
+                allow_multiple=False,
+                file_types=('JSON Files (*.json)',)
+            )
+            
+            if not result or len(result) == 0:
+                return {'success': False, 'error': 'No file selected'}
+            
+            import_path = result[0]
+            
+            # Read and parse JSON
+            with open(import_path, 'r', encoding='utf-8') as f:
+                import_data = json.load(f)
+            
+            # Validate structure
+            if 'conditions' not in import_data or not isinstance(import_data['conditions'], dict):
+                return {'success': False, 'error': 'Invalid conditions file format'}
+            
+            conditions = import_data['conditions']
+            
+            # Update state
+            self.conditional_rules = conditions
+            if self.settings_manager:
+                self.settings_manager.settings['conditional_rules'] = conditions
+                self.settings_manager.save()
+            self._save_app_settings()
+            
+            return {
+                'success': True,
+                'conditions': conditions,
+                'count': len(conditions)
+            }
+            
+        except json.JSONDecodeError as e:
+            return {'success': False, 'error': f'Invalid JSON format: {str(e)}'}
+        except Exception as e:
+            return {'success': False, 'error': f'Error importing conditions: {str(e)}'}
+    
+    def get_field_values(self, field_name: str) -> Dict[str, Any]:
+        """
+        Get unique non-empty values for a specific field
+        
+        Args:
+            field_name: Name of the field to get values for
+            
+        Returns:
+            {
+                'success': bool,
+                'values': list of unique values,
+                'error': str (if failure)
+            }
+        """
+        try:
+            if not self.xml_parser:
+                return {'success': False, 'error': 'No XML file loaded'}
+            
+            # Collect unique non-empty values
+            values = set()
+            for record in self.xml_parser.records:
+                value = record.get(field_name, '').strip()
+                if value:  # Only include non-empty values
+                    values.add(value)
+            
+            # Sort alphabetically
+            sorted_values = sorted(list(values))
+            
+            return {
+                'success': True,
+                'values': sorted_values,
+                'count': len(sorted_values)
+            }
+            
+        except Exception as e:
+            return {'success': False, 'error': f'Error getting field values: {str(e)}'}
     
     def generate_expected_files(self) -> List[Dict[str, Any]]:
         """
