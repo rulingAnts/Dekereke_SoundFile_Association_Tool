@@ -843,6 +843,10 @@ label input[type="checkbox"] {
     background-color: #dbeafe !important;
 }
 
+.datasheet-table td.matched-unexpected {
+    background-color: #fef3c7 !important;  /* Yellow-green for unexpected files */
+}
+
 .datasheet-table td.matched-tentative {
     background-color: #bfdbfe !important;
     font-style: italic;

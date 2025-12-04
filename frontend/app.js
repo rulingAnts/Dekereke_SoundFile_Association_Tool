@@ -1746,7 +1746,13 @@ function buildDataSheet() {
             if (isMappedField) {
                 const cellStatus = getCellStatus(originalRecordIdx, field);
                 if (cellStatus.matched) {
-                    td.classList.add(cellStatus.tentative ? 'matched-tentative' : 'matched');
+                    if (cellStatus.tentative) {
+                        td.classList.add('matched-tentative');
+                    } else if (cellStatus.unexpected) {
+                        td.classList.add('matched-unexpected');  // New class for unexpected files
+                    } else {
+                        td.classList.add('matched');
+                    }
                 } else if (cellStatus.expected) {
                     td.classList.add('missing');
                 }
@@ -1781,11 +1787,12 @@ function buildDataSheet() {
     });
 }
 
-// Get cell status (matched, expected, tentative)
+// Get cell status (matched, expected, tentative, unexpected)
 function getCellStatus(recordIdx, field) {
     const result = {
         matched: false,
         expected: false,
+        unexpected: false,
         tentative: false,
         files: []
     };
@@ -1794,11 +1801,28 @@ function getCellStatus(recordIdx, field) {
     if (field === 'SoundFile' && '' in state.suffixMappings) {
         const key = `${recordIdx}_SoundFile_`;
         
-        // Check if expected
-        if (state.datasheetData.expected_files[key]) {
-            const expectedFile = state.datasheetData.expected_files[key];
-            
+        // Check if matched (file exists)
+        const matchedFile = state.datasheetData.matched_files[key];
+        const expectedFile = state.datasheetData.expected_files[key];
+        
+        if (matchedFile) {
             // Check if it's being unlinked
+            const isUnlinked = state.tentativeUnlinks[matchedFile];
+            
+            if (!isUnlinked) {
+                result.matched = true;
+                result.expected = !!expectedFile;
+                result.unexpected = !expectedFile;  // Matched but not expected
+                
+                result.files.push({
+                    suffix: '',
+                    expected: expectedFile || matchedFile,
+                    matched: matchedFile,
+                    unexpected: !expectedFile
+                });
+            }
+        } else if (expectedFile) {
+            // Expected but not matched
             const isUnlinked = state.tentativeUnlinks[expectedFile];
             
             if (!isUnlinked) {
@@ -1806,13 +1830,8 @@ function getCellStatus(recordIdx, field) {
                 result.files.push({
                     suffix: '',
                     expected: expectedFile,
-                    matched: state.datasheetData.matched_files[key] || null
+                    matched: null
                 });
-                
-                // Check if matched
-                if (state.datasheetData.matched_files[key]) {
-                    result.matched = true;
-                }
             }
         }
     }
@@ -1822,11 +1841,28 @@ function getCellStatus(recordIdx, field) {
         if (state.suffixMappings[suffix].includes(field)) {
             const key = `${recordIdx}_${field}_${suffix}`;
             
-            // Check if expected
-            if (state.datasheetData.expected_files[key]) {
-                const expectedFile = state.datasheetData.expected_files[key];
-                
+            // Check if matched (file exists)
+            const matchedFile = state.datasheetData.matched_files[key];
+            const expectedFile = state.datasheetData.expected_files[key];
+            
+            if (matchedFile) {
                 // Check if it's being unlinked
+                const isUnlinked = state.tentativeUnlinks[matchedFile];
+                
+                if (!isUnlinked) {
+                    result.matched = true;
+                    result.expected = result.expected || !!expectedFile;
+                    result.unexpected = result.unexpected || !expectedFile;  // Matched but not expected
+                    
+                    result.files.push({
+                        suffix: suffix,
+                        expected: expectedFile || matchedFile,
+                        matched: matchedFile,
+                        unexpected: !expectedFile
+                    });
+                }
+            } else if (expectedFile) {
+                // Expected but not matched
                 const isUnlinked = state.tentativeUnlinks[expectedFile];
                 
                 if (!isUnlinked) {
@@ -1834,13 +1870,8 @@ function getCellStatus(recordIdx, field) {
                     result.files.push({
                         suffix: suffix,
                         expected: expectedFile,
-                        matched: state.datasheetData.matched_files[key] || null
+                        matched: null
                     });
-                    
-                    // Check if matched
-                    if (state.datasheetData.matched_files[key]) {
-                        result.matched = true;
-                    }
                 }
             }
         }
@@ -2115,11 +2146,15 @@ function showCellModal(e, recordIdx, field, cellStatus) {
         if (fileInfo.matched) {
             const tentativeClass = fileInfo.tentative ? 'tentative' : '';
             const isExisting = !fileInfo.tentative;
+            const statusLabel = fileInfo.unexpected ? 
+                '<small style="color: #d97706;">(unexpected)</small>' : 
+                (isExisting ? '<small style="color: #6b7280;">(existing)</small>' : '<small style="color: var(--primary-color);">(tentative)</small>');
+            
             filesHTML += `
                 <div class="cell-modal-file ${tentativeClass}">
                     <div style="flex: 1;">
                         <div>${fileInfo.matched}</div>
-                        ${isExisting ? '<small style="color: #6b7280;">(existing)</small>' : '<small style="color: var(--primary-color);">(tentative)</small>'}
+                        ${statusLabel}
                     </div>
                     <div style="display: flex; gap: 0.25rem;">
                         <button class="btn-small btn-secondary" onclick="playAudioFile('${fileInfo.matched}')">▶</button>

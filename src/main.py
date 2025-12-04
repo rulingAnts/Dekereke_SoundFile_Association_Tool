@@ -530,6 +530,10 @@ class DekeRekeAPI:
                             # Check if file exists
                             if expected_filename in self.audio_scanner.audio_files:
                                 matched_files[(idx, field_name, suffix)] = expected_filename
+                        else:
+                            # Not expected, but check if file exists anyway (would be "unexpected")
+                            if expected_filename in self.audio_scanner.audio_files:
+                                matched_files[(idx, field_name, suffix)] = expected_filename
                 
                 # Also check SoundFile field for empty suffix (whole record)
                 if '' in self.suffix_mappings:
@@ -541,7 +545,7 @@ class DekeRekeAPI:
                         # Expected but not found
                         expected_files[(idx, 'SoundFile', '')] = base_filename
             
-            # Find orphaned files
+            # Find orphaned files (files that don't match ANY record+suffix combination)
             all_matched = set(matched_files.values())
             orphaned_files = [f for f in self.audio_scanner.audio_files if f not in all_matched]
             
