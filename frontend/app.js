@@ -24,7 +24,12 @@ const state = {
     sortDirection: 'asc',
     filters: [],
     tentativeAssociations: {},  // {orphanedFile: {recordIdx, field, suffix, newName}}
-    activeModal: null
+    tentativeUnlinks: {},  // {originalFile: {recordIdx, field, suffix, unlinkTo}}
+    activeModal: null,
+    
+    // Audio playback
+    autoPlayAudio: true,
+    currentAudio: null
 };
 
 // Wait for pywebview to be ready
@@ -66,6 +71,22 @@ async function loadPreviousSettings() {
             // Restore field groups
             if (settings.field_groups && Object.keys(settings.field_groups).length > 0) {
                 state.fieldGroups = settings.field_groups;
+            }
+
+            // Restore group filters
+            if (settings.group_filters && Object.keys(settings.group_filters).length > 0) {
+                state.groupFilters = settings.group_filters;
+            }
+
+            // Restore expectation modes (radio selections)
+            if (settings.expectation_modes && Object.keys(settings.expectation_modes).length > 0) {
+                state.expectationModes = settings.expectation_modes;
+                // Apply to UI if already built
+                for (const key in state.expectationModes) {
+                    const value = state.expectationModes[key];
+                    const radio = document.querySelector(`input[name="expect-${key}"][value="${value}"]`);
+                    if (radio) radio.checked = true;
+                }
             }
             
             // Restore datasheet filters
@@ -201,6 +222,9 @@ function setupEventListeners() {
     document.getElementById('btn-clear-tentative').addEventListener('click', clearAllTentative);
     document.getElementById('btn-apply-filters').addEventListener('click', applyFilters);
     document.getElementById('btn-clear-filters').addEventListener('click', clearFilters);
+    document.getElementById('chk-auto-play').addEventListener('change', (e) => {
+        state.autoPlayAudio = e.target.checked;
+    });
     document.getElementById('btn-proceed-to-review').addEventListener('click', () => showScreen('review'));
 
     // Review
@@ -785,6 +809,9 @@ function buildConditionsUI() {
         fieldSection.appendChild(content);
         container.appendChild(fieldSection);
     });
+
+    // After building UI, apply persisted expectation modes (radio selections)
+    applyExpectationModesToUI();
 }
 
 // Get suffixes mapped to a field
@@ -1009,6 +1036,30 @@ function renderGroupConditions(container, groupName, fields) {
     fieldSection.appendChild(header);
     fieldSection.appendChild(content);
     container.appendChild(fieldSection);
+    // Ensure expectation modes are applied when groups render
+    applyExpectationModesToUI();
+}
+
+// Apply persisted expectation modes to the radios and custom builders
+function applyExpectationModesToUI() {
+    if (!state.expectationModes) return;
+    for (const key in state.expectationModes) {
+        const value = state.expectationModes[key];
+        const radio = document.querySelector(`input[name="expect-${key}"][value="${value}"]`);
+        if (radio) {
+            radio.checked = true;
+            // If custom mode, reveal and build the custom conditions UI if needed
+            if (value === 'custom') {
+                const container = document.querySelector(`.custom-conditions-container[data-field="${key}"]`);
+                if (container) {
+                    container.classList.remove('hidden');
+                    if (container.children.length === 0) {
+                        buildCustomConditionsBuilder(container, key);
+                    }
+                }
+            }
+        }
+    }
 }
 
 // Build custom conditions builder with AND/OR logic
@@ -1316,12 +1367,16 @@ async function saveConditions() {
             state.suffixMappings[suffix].forEach(field => fieldsWithMappings.add(field));
         }
         
+        // Build expectation modes map to persist radio selections
+        const expectationModes = {};
+
         // Process groups
         for (const groupName in state.fieldGroups) {
             const groupKey = `__group__${groupName}`;
             const selectedOption = document.querySelector(`input[name="expect-${groupKey}"]:checked`);
             if (selectedOption) {
                 const expectationType = selectedOption.value;
+                expectationModes[groupKey] = expectationType;
                 
                 if (expectationType === 'always') {
                     delete state.conditionalRules[groupKey];
@@ -1355,6 +1410,7 @@ async function saveConditions() {
             const selectedOption = document.querySelector(`input[name="expect-${field}"]:checked`);
             if (selectedOption) {
                 const expectationType = selectedOption.value;
+                expectationModes[field] = expectationType;
                 
                 if (expectationType === 'always') {
                     // Always expect - remove any custom rules
@@ -1375,6 +1431,15 @@ async function saveConditions() {
         });
         
         await window.pywebview.api.save_conditional_rules(state.conditionalRules);
+
+        // Persist expectation modes (radio selections)
+        state.expectationModes = expectationModes;
+        await window.pywebview.api.save_expectation_modes(expectationModes);
+
+        // Persist group filters applied to groups
+        if (state.groupFilters) {
+            await window.pywebview.api.save_group_filters(state.groupFilters);
+        }
         
         // Enable Step 3 navigation
         document.getElementById('nav-step3').disabled = false;
@@ -1495,6 +1560,18 @@ function buildDataSheet() {
                 // Click to show modal
                 td.addEventListener('click', (e) => showCellModal(e, recordIdx, field, cellStatus));
                 
+                // Double-click to play audio if enabled
+                if (cellStatus.matched) {
+                    td.addEventListener('dblclick', () => {
+                        if (state.autoPlayAudio && cellStatus.files.length > 0) {
+                            const file = cellStatus.files.find(f => f.matched);
+                            if (file) {
+                                playAudioFile(file.matched);
+                            }
+                        }
+                    });
+                }
+                
                 // Drag-and-drop only for non-SoundFile fields (or if user is associating with empty suffix)
                 if (field !== 'SoundFile' || (field === 'SoundFile' && '' in state.suffixMappings)) {
                     td.addEventListener('dragover', handleDragOver);
@@ -1525,17 +1602,24 @@ function getCellStatus(recordIdx, field) {
         
         // Check if expected
         if (state.datasheetData.expected_files[key]) {
-            result.expected = true;
-            result.files.push({
-                suffix: '',
-                expected: state.datasheetData.expected_files[key],
-                matched: state.datasheetData.matched_files[key] || null
-            });
-        }
-        
-        // Check if matched
-        if (state.datasheetData.matched_files[key]) {
-            result.matched = true;
+            const expectedFile = state.datasheetData.expected_files[key];
+            
+            // Check if it's being unlinked
+            const isUnlinked = state.tentativeUnlinks[expectedFile];
+            
+            if (!isUnlinked) {
+                result.expected = true;
+                result.files.push({
+                    suffix: '',
+                    expected: expectedFile,
+                    matched: state.datasheetData.matched_files[key] || null
+                });
+                
+                // Check if matched
+                if (state.datasheetData.matched_files[key]) {
+                    result.matched = true;
+                }
+            }
         }
     }
     
@@ -1546,17 +1630,24 @@ function getCellStatus(recordIdx, field) {
             
             // Check if expected
             if (state.datasheetData.expected_files[key]) {
-                result.expected = true;
-                result.files.push({
-                    suffix: suffix,
-                    expected: state.datasheetData.expected_files[key],
-                    matched: state.datasheetData.matched_files[key] || null
-                });
-            }
-            
-            // Check if matched
-            if (state.datasheetData.matched_files[key]) {
-                result.matched = true;
+                const expectedFile = state.datasheetData.expected_files[key];
+                
+                // Check if it's being unlinked
+                const isUnlinked = state.tentativeUnlinks[expectedFile];
+                
+                if (!isUnlinked) {
+                    result.expected = true;
+                    result.files.push({
+                        suffix: suffix,
+                        expected: expectedFile,
+                        matched: state.datasheetData.matched_files[key] || null
+                    });
+                    
+                    // Check if matched
+                    if (state.datasheetData.matched_files[key]) {
+                        result.matched = true;
+                    }
+                }
             }
         }
     }
@@ -1652,10 +1743,34 @@ function renderOrphanedFiles() {
         // Click to show details if tentative
         if (tentative) {
             item.addEventListener('click', () => showTentativeDetails(filename, tentative));
+        } else {
+            // Click to play audio
+            item.addEventListener('click', () => {
+                if (state.autoPlayAudio) {
+                    playAudioFile(filename);
+                }
+            });
         }
         
         list.appendChild(item);
     });
+    
+    // Add files that will be unlinked (they become orphaned)
+    for (const originalFile in state.tentativeUnlinks) {
+        const unlink = state.tentativeUnlinks[originalFile];
+        const item = document.createElement('div');
+        item.className = 'orphaned-file-item tentative';
+        item.style.borderLeft = '3px solid #dc2626';
+        item.innerHTML = `
+            <div class="new-name">${unlink.unlinkTo} <small>(will be unlinked)</small></div>
+            <div class="old-name">${originalFile}</div>
+        `;
+        item.title = `${originalFile} → ${unlink.unlinkTo} (unlinked)`;
+        
+        item.addEventListener('click', () => showUnlinkDetails(originalFile, unlink));
+        
+        list.appendChild(item);
+    }
     
     countBadge.textContent = orphanedCount;
 }
@@ -1805,10 +1920,19 @@ function showCellModal(e, recordIdx, field, cellStatus) {
     cellStatus.files.forEach(fileInfo => {
         if (fileInfo.matched) {
             const tentativeClass = fileInfo.tentative ? 'tentative' : '';
+            const isExisting = !fileInfo.tentative;
             filesHTML += `
                 <div class="cell-modal-file ${tentativeClass}">
-                    <span>${fileInfo.matched}</span>
-                    ${fileInfo.tentative ? '<button class="btn-danger btn-small" onclick="removeTentative(\'' + fileInfo.originalFile + '\')">Remove</button>' : ''}
+                    <div style="flex: 1;">
+                        <div>${fileInfo.matched}</div>
+                        ${isExisting ? '<small style="color: #6b7280;">(existing)</small>' : '<small style="color: var(--primary-color);">(tentative)</small>'}
+                    </div>
+                    <div style="display: flex; gap: 0.25rem;">
+                        <button class="btn-small btn-secondary" onclick="playAudioFile('${fileInfo.matched}')">▶</button>
+                        ${fileInfo.tentative ? 
+                            '<button class="btn-danger btn-small" onclick="removeTentative(\'' + fileInfo.originalFile + '\')">Remove</button>' : 
+                            '<button class="btn-danger btn-small" onclick="unlinkExistingFile(\'' + fileInfo.matched + '\', ' + recordIdx + ', \'' + field + '\', \'' + fileInfo.suffix + '\')">Unlink</button>'}
+                    </div>
                 </div>
             `;
         } else if (fileInfo.expected) {
@@ -1880,9 +2004,10 @@ function showTentativeDetails(filename, tentative) {
                 <p><strong>New Name:</strong> ${tentative.newName}</p>
                 <p><strong>Record:</strong> ${state.datasheetData.records[tentative.recordIdx].Reference}</p>
                 <p><strong>Field:</strong> ${tentative.field}</p>
-                <p><strong>Suffix:</strong> ${tentative.suffix}</p>
+                <p><strong>Suffix:</strong> ${tentative.suffix || '(no suffix)'}</p>
             </div>
             <div class="button-row">
+                <button id="btn-play-file" class="btn-secondary">▶ Play</button>
                 <button id="btn-remove-tentative" class="btn-danger">Remove Association</button>
                 <button id="btn-close-tentative" class="btn-secondary">Close</button>
             </div>
@@ -1890,6 +2015,10 @@ function showTentativeDetails(filename, tentative) {
     `;
     
     document.body.appendChild(modal);
+    
+    modal.querySelector('#btn-play-file').addEventListener('click', () => {
+        playAudioFile(tentative.oldName);
+    });
     
     modal.querySelector('#btn-remove-tentative').addEventListener('click', () => {
         delete state.tentativeAssociations[filename];
@@ -1904,18 +2033,69 @@ function showTentativeDetails(filename, tentative) {
     });
 }
 
+// Show unlink details
+function showUnlinkDetails(filename, unlink) {
+    const modal = document.createElement('div');
+    modal.className = 'modal';
+    modal.innerHTML = `
+        <div class="modal-content" style="max-width: 500px;">
+            <h3>⚠️ Tentative Unlink</h3>
+            <div style="margin: 1rem 0;">
+                <p><strong>Original:</strong> ${unlink.originalName}</p>
+                <p><strong>Will Rename To:</strong> ${unlink.unlinkTo}</p>
+                <p><strong>Record:</strong> ${state.datasheetData.records[unlink.recordIdx].Reference}</p>
+                <p><strong>Field:</strong> ${unlink.field}</p>
+                <p><strong>Suffix:</strong> ${unlink.suffix || '(no suffix)'}</p>
+                <hr style="margin: 1rem 0;">
+                <p style="color: #dc2626;">This will break the existing association.</p>
+            </div>
+            <div class="button-row">
+                <button id="btn-play-unlink" class="btn-secondary">▶ Play</button>
+                <button id="btn-cancel-unlink" class="btn-danger">Cancel Unlink</button>
+                <button id="btn-close-unlink" class="btn-secondary">Close</button>
+            </div>
+        </div>
+    `;
+    
+    document.body.appendChild(modal);
+    
+    modal.querySelector('#btn-play-unlink').addEventListener('click', () => {
+        playAudioFile(unlink.originalName);
+    });
+    
+    modal.querySelector('#btn-cancel-unlink').addEventListener('click', () => {
+        delete state.tentativeUnlinks[filename];
+        modal.remove();
+        buildDataSheet();
+        renderOrphanedFiles();
+        showSuccess('Cancelled unlink');
+    });
+    
+    modal.querySelector('#btn-close-unlink').addEventListener('click', () => {
+        modal.remove();
+    });
+}
+
 // Clear all tentative associations
 function clearAllTentative() {
-    if (Object.keys(state.tentativeAssociations).length === 0) {
-        showError('No tentative associations to clear');
+    const hasAssociations = Object.keys(state.tentativeAssociations).length > 0;
+    const hasUnlinks = Object.keys(state.tentativeUnlinks).length > 0;
+    
+    if (!hasAssociations && !hasUnlinks) {
+        showError('No tentative changes to clear');
         return;
     }
     
-    if (confirm('Clear all tentative associations?')) {
+    const message = [];
+    if (hasAssociations) message.push(`${Object.keys(state.tentativeAssociations).length} association(s)`);
+    if (hasUnlinks) message.push(`${Object.keys(state.tentativeUnlinks).length} unlink(s)`);
+    
+    if (confirm(`Clear all tentative changes? (${message.join(' and ')})`)) {
         state.tentativeAssociations = {};
+        state.tentativeUnlinks = {};
         buildDataSheet();
         renderOrphanedFiles();
-        showSuccess('Cleared all tentative associations');
+        showSuccess('Cleared all tentative changes');
     }
 }
 
@@ -2062,6 +2242,111 @@ async function acceptSuggestions() {
 String.prototype.rsplit = function(sep, maxsplit) {
     const split = this.split(sep);
     return maxsplit ? [split.slice(0, -maxsplit).join(sep)].concat(split.slice(-maxsplit)) : split;
+};
+
+// Play audio file
+window.playAudioFile = async function(filename) {
+    try {
+        // Stop current audio if playing
+        if (state.currentAudio) {
+            state.currentAudio.pause();
+            state.currentAudio = null;
+        }
+        
+        // Request audio file from backend
+        const result = await window.pywebview.api.get_audio_file_path(filename);
+        
+        if (result.success) {
+            const audio = new Audio(`file://${result.path}`);
+            state.currentAudio = audio;
+            
+            audio.play().catch(error => {
+                console.error('Error playing audio:', error);
+                showError('Could not play audio file');
+            });
+            
+            audio.onended = () => {
+                state.currentAudio = null;
+            };
+        } else {
+            showError('Could not find audio file: ' + filename);
+        }
+    } catch (error) {
+        console.error('Error playing audio:', error);
+        showError('Error playing audio: ' + error.message);
+    }
+};
+
+// Unlink existing file with confirmation
+window.unlinkExistingFile = async function(filename, recordIdx, field, suffix) {
+    // Close existing modal
+    if (state.activeModal) {
+        state.activeModal.remove();
+        state.activeModal = null;
+    }
+    
+    const modal = document.createElement('div');
+    modal.className = 'modal';
+    modal.innerHTML = `
+        <div class="modal-content" style="max-width: 500px;">
+            <h3>⚠️ Unlink Existing Association</h3>
+            <div style="margin: 1rem 0;">
+                <p style="color: #dc2626; font-weight: 600;">WARNING: This will break an existing soundfile association!</p>
+                <p><strong>File:</strong> ${filename}</p>
+                <p><strong>Record:</strong> ${state.datasheetData.records[recordIdx].Reference}</p>
+                <p><strong>Field:</strong> ${field}</p>
+                <p><strong>Suffix:</strong> ${suffix || '(no suffix)'}</p>
+                <hr style="margin: 1rem 0;">
+                <p>The file will be renamed to include "_UNLINKED" in its name, breaking the association.</p>
+                <p style="margin-top: 1rem;"><strong>Type "UNLINK" to confirm:</strong></p>
+                <input type="text" id="unlink-confirm-input" style="width: 100%; padding: 0.5rem; border: 2px solid #dc2626; border-radius: 4px; font-weight: 600;" placeholder="Type UNLINK">
+            </div>
+            <div class="button-row">
+                <button id="btn-confirm-unlink" class="btn-danger" disabled>Unlink</button>
+                <button id="btn-cancel-unlink" class="btn-secondary">Cancel</button>
+            </div>
+        </div>
+    `;
+    
+    document.body.appendChild(modal);
+    
+    const input = modal.querySelector('#unlink-confirm-input');
+    const confirmBtn = modal.querySelector('#btn-confirm-unlink');
+    
+    // Enable button when user types UNLINK
+    input.addEventListener('input', (e) => {
+        confirmBtn.disabled = e.target.value.trim().toUpperCase() !== 'UNLINK';
+    });
+    
+    // Focus input
+    setTimeout(() => input.focus(), 100);
+    
+    confirmBtn.addEventListener('click', () => {
+        // Generate unlinked name
+        const baseName = filename.rsplit('.', 1)[0];
+        const ext = filename.includes('.') ? '.' + filename.split('.').pop() : '';
+        const timestamp = Date.now();
+        const unlinkedName = `${baseName}_UNLINKED_${timestamp}${ext}`;
+        
+        // Add to tentative unlinks
+        state.tentativeUnlinks[filename] = {
+            recordIdx: recordIdx,
+            field: field,
+            suffix: suffix,
+            unlinkTo: unlinkedName,
+            originalName: filename
+        };
+        
+        modal.remove();
+        buildDataSheet();
+        renderOrphanedFiles();
+        
+        showSuccess(`Will unlink ${filename} → ${unlinkedName}`);
+    });
+    
+    modal.querySelector('#btn-cancel-unlink').addEventListener('click', () => {
+        modal.remove();
+    });
 };
 
 // Show duplicate warning

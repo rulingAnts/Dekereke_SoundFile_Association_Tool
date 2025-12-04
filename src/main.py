@@ -52,7 +52,10 @@ class DekeRekeAPI:
             'last_audio_folder': None,
             'case_sensitive': False,
             'suffix_mappings': {},
-            'conditional_rules': {}
+            'conditional_rules': {},
+            'field_groups': {},
+            'group_filters': {},
+            'expectation_modes': {}
         }
         
         try:
@@ -88,6 +91,8 @@ class DekeRekeAPI:
             'suffix_mappings': self.app_settings.get('suffix_mappings', {}),
             'conditional_rules': self.app_settings.get('conditional_rules', {}),
             'field_groups': self.app_settings.get('field_groups', {}),
+            'group_filters': self.app_settings.get('group_filters', {}),
+            'expectation_modes': self.app_settings.get('expectation_modes', {}),
             'datasheet_filters': self.app_settings.get('datasheet_filters', []),
             'visible_columns': self.app_settings.get('visible_columns', [])
         }
@@ -149,6 +154,13 @@ class DekeRekeAPI:
             # Load settings for this project
             self.settings_manager = SettingsManager(xml_path)
             self.settings_manager.load()
+            
+            # Restore suffix mappings and conditional rules from app settings
+            self.suffix_mappings = self.app_settings.get('suffix_mappings', {})
+            self.conditional_rules = self.app_settings.get('conditional_rules', {})
+            # Restore field groups and group filters (used in expectations)
+            # Field groups are accessed via self.app_settings in expectation checks
+            # Group filters are provided to frontend via get_initial_settings
             
             return {
                 'success': True,
@@ -343,6 +355,27 @@ class DekeRekeAPI:
         """
         self.app_settings['field_groups'] = groups
         self._save_app_settings()
+
+    def save_group_filters(self, groups_filters: Dict[str, Any]):
+        """
+        Save filter conditions applied to groups
+
+        Args:
+            groups_filters: dict of group_name -> filter definition(s)
+        """
+        self.app_settings['group_filters'] = groups_filters
+        self._save_app_settings()
+
+    def save_expectation_modes(self, modes: Dict[str, str]):
+        """
+        Persist selected expectation mode per field/group.
+
+        Args:
+            modes: dict mapping field name or group key (e.g., __group__X) to one of
+                   'always' | 'non-empty' | 'custom'
+        """
+        self.app_settings['expectation_modes'] = modes
+        self._save_app_settings()
     
     def save_datasheet_settings(self, filters: List, visible_columns: List[str]):
         """
@@ -355,6 +388,30 @@ class DekeRekeAPI:
         self.app_settings['datasheet_filters'] = filters
         self.app_settings['visible_columns'] = visible_columns
         self._save_app_settings()
+    
+    def get_audio_file_path(self, filename: str) -> Dict[str, Any]:
+        """
+        Get the full path to an audio file
+        
+        Args:
+            filename: name of the audio file
+            
+        Returns:
+            {'success': bool, 'path': str, 'error': str}
+        """
+        try:
+            if not self.audio_folder:
+                return {'success': False, 'error': 'No audio folder selected'}
+            
+            file_path = os.path.join(self.audio_folder, filename)
+            
+            if not os.path.exists(file_path):
+                return {'success': False, 'error': 'File not found'}
+            
+            return {'success': True, 'path': file_path}
+            
+        except Exception as e:
+            return {'success': False, 'error': str(e)}
     
     def get_datasheet_data(self) -> Dict[str, Any]:
         """
@@ -437,17 +494,30 @@ class DekeRekeAPI:
             all_matched = set(matched_files.values())
             orphaned_files = [f for f in self.audio_scanner.audio_files if f not in all_matched]
             
-            return {
+            # Debug: ensure all values are JSON serializable
+            result = {
                 'success': True,
                 'records': records,
-                'field_names': field_names,
-                'mapped_fields': mapped_fields,
+                'field_names': list(field_names),  # Ensure it's a list
+                'mapped_fields': mapped_fields,  # Already converted to list at line 424
                 'matched_files': {f"{k[0]}_{k[1]}_{k[2]}": v for k, v in matched_files.items()},
                 'expected_files': {f"{k[0]}_{k[1]}_{k[2]}": v for k, v in expected_files.items()},
                 'orphaned_files': sorted(orphaned_files)
             }
             
+            print(f"DEBUG: Returning datasheet data:")
+            print(f"  - records: {len(records)}")
+            print(f"  - field_names type: {type(result['field_names'])}, len: {len(result['field_names'])}")
+            print(f"  - mapped_fields type: {type(result['mapped_fields'])}, value: {result['mapped_fields']}")
+            print(f"  - matched_files: {len(result['matched_files'])}")
+            print(f"  - orphaned_files: {len(result['orphaned_files'])}")
+            
+            return result
+            
         except Exception as e:
+            import traceback
+            print(f"ERROR in get_datasheet_data: {e}")
+            print(traceback.format_exc())
             return {'success': False, 'error': str(e)}
     
     def _should_expect_recording_for_field_or_group(self, record: Dict[str, str], field_name: str) -> bool:
