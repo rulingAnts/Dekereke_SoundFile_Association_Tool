@@ -29,7 +29,8 @@ const state = {
     
     // Audio playback
     autoPlayAudio: true,
-    currentAudio: null
+    currentAudio: null,
+    currentBlobUrl: null  // Track blob URLs for cleanup
 };
 
 // Wait for pywebview to be ready
@@ -2373,42 +2374,80 @@ String.prototype.rsplit = function(sep, maxsplit) {
 
 // Play audio file
 window.playAudioFile = async function(filename) {
+    console.log('[playAudioFile] Starting playback for:', filename);
     try {
         // Stop current audio if playing
         if (state.currentAudio) {
+            console.log('[playAudioFile] Stopping current audio');
             state.currentAudio.pause();
             state.currentAudio = null;
         }
         
-        // Request audio file from backend
-        const result = await window.pywebview.api.get_audio_file_path(filename);
+        // Clean up previous blob URLs to prevent memory leaks
+        if (state.currentBlobUrl) {
+            URL.revokeObjectURL(state.currentBlobUrl);
+            state.currentBlobUrl = null;
+        }
         
-        if (result.success) {
-            const url = result.url || encodeURI(`file://${result.path}`);
-            const audio = new Audio(url);
+        // Get audio data from backend
+        console.log('[playAudioFile] Requesting audio data from backend');
+        const result = await window.pywebview.api.get_audio_data_url(filename);
+        console.log('[playAudioFile] Backend response received, size:', result?.size || 0);
+        
+        if (result && result.success) {
+            let audioUrl;
+            
+            // Try to create blob URL from byte array (more efficient)
+            if (result.bytes && result.mime) {
+                console.log('[playAudioFile] Creating blob URL from bytes');
+                try {
+                    const uint8Array = new Uint8Array(result.bytes);
+                    const blob = new Blob([uint8Array], { type: result.mime });
+                    audioUrl = URL.createObjectURL(blob);
+                    state.currentBlobUrl = audioUrl;
+                    console.log('[playAudioFile] Blob URL created successfully');
+                } catch (blobError) {
+                    console.warn('[playAudioFile] Blob creation failed, falling back to base64:', blobError);
+                    audioUrl = `data:${result.mime};base64,${result.base64}`;
+                }
+            } else if (result.base64) {
+                // Fallback to base64 data URL
+                console.log('[playAudioFile] Using base64 data URL (fallback)');
+                audioUrl = `data:${result.mime};base64,${result.base64}`;
+            } else {
+                throw new Error('No audio data received from backend');
+            }
+            
+            console.log('[playAudioFile] Creating audio element');
+            const audio = new Audio(audioUrl);
             audio.preload = 'auto';
             state.currentAudio = audio;
             
-            audio.play().catch(error => {
-                console.error('Error playing audio:', error);
-                showError(`Could not play audio file. URL: ${url}. Trying alternate method...`);
-                // Fallback: request data URL and play
-                fallbackPlayAudio(filename);
-            });
             audio.addEventListener('error', (e) => {
-                console.error('Audio element error', e);
-                showError(`Audio element error. URL: ${url}. Trying alternate method...`);
-                fallbackPlayAudio(filename);
+                console.error('[playAudioFile] Audio element error', e);
+                showError(`Could not play audio file: ${filename}`);
+            });
+            
+            audio.play().catch(error => {
+                console.error('[playAudioFile] Error playing audio:', error);
+                showError(`Could not play audio file: ${filename}`);
             });
             
             audio.onended = () => {
+                console.log('[playAudioFile] Audio playback ended');
                 state.currentAudio = null;
+                // Clean up blob URL
+                if (state.currentBlobUrl) {
+                    URL.revokeObjectURL(state.currentBlobUrl);
+                    state.currentBlobUrl = null;
+                }
             };
         } else {
-            showError('Could not find audio file: ' + filename);
+            console.error('[playAudioFile] Backend returned error:', result?.error || 'Invalid response');
+            showError('Could not load audio file: ' + filename);
         }
     } catch (error) {
-        console.error('Error playing audio:', error);
+        console.error('[playAudioFile] Exception:', error);
         showError('Error playing audio: ' + error.message);
     }
 };
@@ -2497,27 +2536,6 @@ function showDuplicateWarning(duplicates) {
     list.innerHTML += '</ul>';
     
     warning.classList.remove('hidden');
-}
-
-async function fallbackPlayAudio(filename) {
-    try {
-        const data = await window.pywebview.api.get_audio_data_url(filename);
-        if (data && data.success && data.url) {
-            const audio = new Audio(data.url);
-            audio.preload = 'auto';
-            state.currentAudio = audio;
-            audio.play().catch(err => {
-                console.error('Fallback audio play failed:', err);
-                showError('Fallback audio play failed');
-            });
-            audio.onended = () => { state.currentAudio = null; };
-        } else {
-            showError('Unable to build audio data URL');
-        }
-    } catch (e) {
-        console.error('Error in fallback audio:', e);
-        showError('Error in fallback audio: ' + e.message);
-    }
 }
 
 // Show empty soundfile warning

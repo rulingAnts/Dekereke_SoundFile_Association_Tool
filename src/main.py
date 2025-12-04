@@ -415,39 +415,51 @@ class DekeRekeAPI:
             encoded_path = quote(file_path)
             file_url = f"file:///{encoded_path.lstrip('/')}"
             return {'success': True, 'path': file_path, 'url': file_url}
-                def get_audio_data_url(self, filename: str) -> Dict[str, Any]:
-                    """
-                    Return a base64 data URL for the audio file to ensure playback in WebView
-                    """
-                    try:
-                        if not self.audio_folder:
-                            return {'success': False, 'error': 'No audio folder selected'}
-
-                        file_path = os.path.join(self.audio_folder, filename)
-                        if not os.path.exists(file_path):
-                            return {'success': False, 'error': 'File not found'}
-
-                        # Detect MIME type from extension
-                        ext = os.path.splitext(filename)[1].lower()
-                        mime_map = {
-                            '.wav': 'audio/wav',
-                            '.mp3': 'audio/mpeg',
-                            '.m4a': 'audio/mp4',
-                            '.aac': 'audio/aac',
-                            '.aiff': 'audio/aiff',
-                            '.aif': 'audio/aiff',
-                            '.flac': 'audio/flac',
-                            '.ogg': 'audio/ogg',
-                        }
-                        mime = mime_map.get(ext, 'audio/wav')
-
-                        with open(file_path, 'rb') as f:
-                            b64 = base64.b64encode(f.read()).decode('ascii')
-                        data_url = f"data:{mime};base64,{b64}"
-                        return {'success': True, 'url': data_url}
-                    except Exception as e:
-                        return {'success': False, 'error': str(e)}
             
+        except Exception as e:
+            return {'success': False, 'error': str(e)}
+    
+    def get_audio_data_url(self, filename: str) -> Dict[str, Any]:
+        """
+        Return audio file as raw bytes for blob URL creation (more efficient than base64)
+        Returns base64 as fallback for pywebview compatibility
+        """
+        try:
+            if not self.audio_folder:
+                return {'success': False, 'error': 'No audio folder selected'}
+
+            file_path = os.path.join(self.audio_folder, filename)
+            if not os.path.exists(file_path):
+                return {'success': False, 'error': 'File not found'}
+
+            # Detect MIME type from extension
+            ext = os.path.splitext(filename)[1].lower()
+            mime_map = {
+                '.wav': 'audio/wav',
+                '.mp3': 'audio/mpeg',
+                '.m4a': 'audio/mp4',
+                '.aac': 'audio/aac',
+                '.aiff': 'audio/aiff',
+                '.aif': 'audio/aiff',
+                '.flac': 'audio/flac',
+                '.ogg': 'audio/ogg',
+            }
+            mime = mime_map.get(ext, 'audio/wav')
+
+            # Read file bytes
+            with open(file_path, 'rb') as f:
+                file_bytes = f.read()
+            
+            # Return both base64 (for fallback) and raw bytes (pywebview converts to JS ArrayBuffer)
+            b64 = base64.b64encode(file_bytes).decode('ascii')
+            
+            return {
+                'success': True,
+                'bytes': list(file_bytes),  # Convert to list for JSON serialization
+                'mime': mime,
+                'size': len(file_bytes),
+                'base64': b64  # Fallback for older pywebview versions
+            }
         except Exception as e:
             return {'success': False, 'error': str(e)}
     
@@ -1202,7 +1214,8 @@ def main():
         resizable=True
     )
     
-    webview.start()
+    # Start with debug mode enabled to show console output in terminal
+    webview.start(debug=True)
 
 
 if __name__ == '__main__':
