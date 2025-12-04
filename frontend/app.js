@@ -201,6 +201,9 @@ function setupEventListeners() {
     document.getElementById('btn-load-dekereke-settings').addEventListener('click', loadDekeRekeSettings);
     document.getElementById('btn-import-mappings').addEventListener('click', importMappings);
     document.getElementById('btn-export-mappings').addEventListener('click', exportMappings);
+    document.getElementById('btn-copy-mappings').addEventListener('click', copyMappings);
+    document.getElementById('btn-paste-mappings').addEventListener('click', pasteMappings);
+    document.getElementById('btn-clear-mappings').addEventListener('click', clearMappings);
     document.getElementById('btn-save-mappings').addEventListener('click', saveMappings);
     document.getElementById('btn-proceed-to-step2').addEventListener('click', () => {
         showScreen('step2');
@@ -431,6 +434,14 @@ function refreshMappingTiles() {
     // Clear all existing tiles
     document.querySelectorAll('.mapped-tile').forEach(tile => tile.remove());
     
+    // Only proceed if suffix and field lists exist (i.e., XML has been loaded)
+    const suffixList = document.getElementById('suffix-list');
+    const fieldList = document.getElementById('field-list');
+    if (!suffixList || !fieldList || suffixList.children.length === 0 || fieldList.children.length === 0) {
+        // UI not built yet, skip rendering tiles
+        return;
+    }
+    
     // Rebuild tiles from state.suffixMappings
     for (const suffix in state.suffixMappings) {
         const fields = state.suffixMappings[suffix];
@@ -498,7 +509,7 @@ function handleDragOver(e) {
 
 function handleDrop(e) {
     if (e.stopPropagation) {
-        e.stopPropagation();
+        e.stopPropagagation();
     }
     e.target.classList.remove('drag-over');
     
@@ -528,10 +539,20 @@ function handleDrop(e) {
             return false;
         }
         
-        // Check if this mapping already exists
-        if (state.suffixMappings[suffix] && state.suffixMappings[suffix].includes(field)) {
-            showError('This mapping already exists');
-            return false;
+        // Check if this field is already mapped to a different suffix
+        // (Dekereke constraint: one field can only have one suffix)
+        for (const existingSuffix in state.suffixMappings) {
+            if (state.suffixMappings[existingSuffix].includes(field)) {
+                if (existingSuffix === suffix) {
+                    showError('This mapping already exists');
+                    return false;
+                } else {
+                    const suffixDisplay = existingSuffix || '(no suffix)';
+                    const newSuffixDisplay = suffix || '(no suffix)';
+                    showError(`Field "${field}" is already mapped to suffix "${suffixDisplay}". Each field can only have one suffix. Remove the existing mapping first.`);
+                    return false;
+                }
+            }
         }
         
         // Add mapping to state
@@ -586,7 +607,7 @@ async function loadDekeRekeSettings() {
     }
 }
 
-// Export mappings to JSON file
+// Export mappings to TSV text file
 async function exportMappings() {
     showLoading('Exporting mappings...');
     
@@ -610,7 +631,7 @@ async function exportMappings() {
     }
 }
 
-// Import mappings from JSON file
+// Import mappings from TSV text file
 async function importMappings() {
     showLoading('Importing mappings...');
     
@@ -621,8 +642,8 @@ async function importMappings() {
             // Update state with imported mappings
             state.suffixMappings = result.mappings;
             
-            // Refresh UI from state
-            refreshMappingTiles();
+            // Rebuild UI to reattach drag-drop listeners
+            buildMappingUI();
             
             showSuccess(`Imported ${result.count} suffix mappings`);
         } else {
@@ -634,6 +655,177 @@ async function importMappings() {
         showError('Error importing mappings: ' + error.message);
     } finally {
         hideLoading();
+    }
+}
+
+// Copy mappings to clipboard in TSV format
+async function copyMappings() {
+    try {
+        if (Object.keys(state.suffixMappings).length === 0) {
+            showError('No mappings to copy');
+            return;
+        }
+        
+        // Convert mappings to TSV format (field<tab>suffix)
+        const lines = [];
+        const emptySuffixLines = [];  // Store empty suffix mappings separately
+        
+        for (const suffix in state.suffixMappings) {
+            const fields = state.suffixMappings[suffix];
+            for (const field of fields) {
+                const line = `${field}\t${suffix}`;
+                if (suffix === '') {  // Empty suffix (Whole Record)
+                    emptySuffixLines.push(line);
+                } else {
+                    lines.push(line);
+                }
+            }
+        }
+        
+        // Sort non-empty suffix lines
+        lines.sort();
+        
+        // Append empty suffix lines at the end
+        emptySuffixLines.sort();
+        lines.push(...emptySuffixLines);
+        
+        const tsvText = lines.join('\n');
+        
+        // Use native clipboard via Python backend
+        const result = await window.pywebview.api.copy_to_clipboard(tsvText);
+        
+        if (result.success) {
+            showSuccess('Mappings copied to clipboard');
+        } else {
+            showError(result.error || 'Failed to copy to clipboard');
+        }
+        
+    } catch (error) {
+        showError('Error copying mappings: ' + error.message);
+    }
+}
+
+// Paste mappings from clipboard TSV format
+async function pasteMappings() {
+    showLoading('Pasting mappings...');
+    
+    try {
+        // Read from clipboard using native Python backend
+        const clipResult = await window.pywebview.api.paste_from_clipboard();
+        
+        if (!clipResult.success) {
+            showError(clipResult.error || 'Failed to read from clipboard');
+            return;
+        }
+        
+        const tsvText = clipResult.text;
+        
+        if (!tsvText.trim()) {
+            showError('Clipboard is empty');
+            return;
+        }
+        
+        // Parse TSV format (field<tab>suffix)
+        const mappings = {};
+        const lines = tsvText.split('\n');
+        
+        for (let i = 0; i < lines.length; i++) {
+            const line = lines[i];
+            
+            // Skip completely empty lines
+            if (line.trim() === '') {
+                continue;
+            }
+            
+            // Skip comments
+            if (line.trim().startsWith('#')) {
+                continue;
+            }
+            
+            // Check if line contains a tab
+            if (!line.includes('\t')) {
+                showError(`Invalid format at line ${i + 1}: expected field<tab>suffix (no tab found)`);
+                return;
+            }
+            
+            const parts = line.split('\t');
+            if (parts.length !== 2) {
+                showError(`Invalid format at line ${i + 1}: expected field<tab>suffix (found ${parts.length} parts)`);
+                return;
+            }
+            
+            const field = parts[0].trim();
+            const suffix = parts[1].trim();  // Allow empty suffix
+            
+            if (!field) {
+                showError(`Empty field name at line ${i + 1}`);
+                return;
+            }
+            
+            // Check for duplicate field mappings (Dekereke constraint: one field = one suffix)
+            for (const existingSuffix in mappings) {
+                if (mappings[existingSuffix].includes(field)) {
+                    const suffixDisplay = existingSuffix || '(no suffix)';
+                    const newSuffixDisplay = suffix || '(no suffix)';
+                    showError(`Line ${i + 1}: Field "${field}" is already mapped to suffix "${suffixDisplay}". Each field can only have one suffix. Only the first mapping will be kept.`);
+                    return;
+                }
+            }
+            
+            // Build suffix -> [fields] mapping (suffix can be empty string)
+            if (!mappings[suffix]) {
+                mappings[suffix] = [];
+            }
+            if (!mappings[suffix].includes(field)) {
+                mappings[suffix].push(field);
+            }
+        }
+        
+        if (Object.keys(mappings).length === 0) {
+            showError('No valid mappings found in clipboard');
+            return;
+        }
+        
+        // Update state
+        state.suffixMappings = mappings;
+        
+        // Rebuild UI to reattach drag-drop listeners
+        buildMappingUI();
+        
+        // Save to persistent storage
+        await window.pywebview.api.save_suffix_mappings(mappings);
+        
+        showSuccess(`Pasted ${Object.keys(mappings).length} suffix mappings`);
+        
+    } catch (error) {
+        showError('Error pasting mappings: ' + error.message);
+    } finally {
+        hideLoading();
+    }
+}
+
+// Clear all mappings
+async function clearMappings() {
+    const confirmed = confirm('Are you sure you want to clear all mappings? This cannot be undone.');
+    
+    if (!confirmed) {
+        return;
+    }
+    
+    try {
+        // Clear state
+        state.suffixMappings = {};
+        
+        // Rebuild UI
+        buildMappingUI();
+        
+        // Save to persistent storage
+        await window.pywebview.api.save_suffix_mappings({});
+        
+        showSuccess('All mappings cleared');
+        
+    } catch (error) {
+        showError('Error clearing mappings: ' + error.message);
     }
 }
 
@@ -1522,7 +1714,7 @@ function buildDataSheet() {
     thead.appendChild(headerRow);
     
     // Get records (apply filters if any)
-    let records = state.datasheetData.records;
+    let records = state.datasheetData.records.map((rec, idx) => ({...rec, _originalIndex: idx}));
     if (state.filters.length > 0) {
         records = applyFiltersToRecords(records);
     }
@@ -1533,13 +1725,14 @@ function buildDataSheet() {
     }
     
     // Build data rows
-    records.forEach((record, recordIdx) => {
+    records.forEach((record, displayIdx) => {
         const tr = document.createElement('tr');
+        const originalRecordIdx = record._originalIndex;  // Use original index for data lookups
         
         state.columnOrder.forEach(field => {
             const td = document.createElement('td');
             td.textContent = record[field] || '';
-            td.dataset.recordIdx = recordIdx;
+            td.dataset.recordIdx = originalRecordIdx;  // Store original index
             td.dataset.field = field;
             
             // Frozen Reference column
@@ -1551,7 +1744,7 @@ function buildDataSheet() {
             const isMappedField = state.datasheetData.mapped_fields.includes(field);
             
             if (isMappedField) {
-                const cellStatus = getCellStatus(recordIdx, field);
+                const cellStatus = getCellStatus(originalRecordIdx, field);
                 if (cellStatus.matched) {
                     td.classList.add(cellStatus.tentative ? 'matched-tentative' : 'matched');
                 } else if (cellStatus.expected) {
@@ -1559,7 +1752,7 @@ function buildDataSheet() {
                 }
                 
                 // Click to show modal
-                td.addEventListener('click', (e) => showCellModal(e, recordIdx, field, cellStatus));
+                td.addEventListener('click', (e) => showCellModal(e, originalRecordIdx, field, cellStatus));
                 
                 // Double-click to play audio if enabled
                 if (cellStatus.matched) {
@@ -1576,7 +1769,7 @@ function buildDataSheet() {
                 // Drag-and-drop only for non-SoundFile fields (or if user is associating with empty suffix)
                 if (field !== 'SoundFile' || (field === 'SoundFile' && '' in state.suffixMappings)) {
                     td.addEventListener('dragover', handleDragOver);
-                    td.addEventListener('drop', (e) => handleDrop(e, recordIdx, field));
+                    td.addEventListener('drop', (e) => handleDrop(e, originalRecordIdx, field));
                     td.addEventListener('dragleave', handleDragLeave);
                 }
             }

@@ -13,6 +13,7 @@ import uuid
 import shutil
 import xml.etree.ElementTree as ET
 import base64
+import pyperclip
 
 from xml_parser import DekeRekeXMLParser
 from audio_scanner import AudioFolderScanner
@@ -632,7 +633,7 @@ class DekeRekeAPI:
     
     def export_mappings(self, mappings: Dict[str, List[str]]) -> Dict[str, Any]:
         """
-        Export field-to-suffix mappings to JSON file
+        Export field-to-suffix mappings to TSV text file (field<tab>suffix format)
         
         Args:
             mappings: dict of suffix -> list of field names
@@ -644,8 +645,8 @@ class DekeRekeAPI:
             # Open save dialog
             result = webview.windows[0].create_file_dialog(
                 webview.SAVE_DIALOG,
-                save_filename='dekereke-mappings.json',
-                file_types=('JSON Files (*.json)',)
+                save_filename='dekereke-mappings.txt',
+                file_types=('Text Files (*.txt)',)
             )
             
             if not result:
@@ -653,25 +654,69 @@ class DekeRekeAPI:
             
             save_path = result
             
-            # Create export data
-            export_data = {
-                'version': '1.0',
-                'timestamp': datetime.now().isoformat(),
-                'mappings': mappings
-            }
+            # Convert mappings to TSV format (field<tab>suffix)
+            # mappings is suffix -> [field1, field2, ...]
+            lines = []
+            empty_suffix_lines = []  # Store empty suffix mappings separately
+            
+            for suffix, fields in mappings.items():
+                for field in fields:
+                    line = f"{field}\t{suffix}"
+                    if suffix == '':  # Empty suffix (Whole Record)
+                        empty_suffix_lines.append(line)
+                    else:
+                        lines.append(line)
+            
+            # Sort non-empty suffix lines
+            lines.sort()
+            
+            # Append empty suffix lines at the end
+            lines.extend(sorted(empty_suffix_lines))
             
             # Write to file
             with open(save_path, 'w', encoding='utf-8') as f:
-                json.dump(export_data, f, indent=2, ensure_ascii=False)
+                f.write('\n'.join(lines))
+                if lines:  # Add trailing newline if not empty
+                    f.write('\n')
             
             return {'success': True, 'path': save_path}
             
         except Exception as e:
             return {'success': False, 'error': f'Error exporting mappings: {str(e)}'}
     
+    def copy_to_clipboard(self, text: str) -> Dict[str, Any]:
+        """
+        Copy text to system clipboard using native clipboard access
+        
+        Args:
+            text: Text to copy to clipboard
+            
+        Returns:
+            {'success': bool, 'error': str (if failure)}
+        """
+        try:
+            pyperclip.copy(text)
+            return {'success': True}
+        except Exception as e:
+            return {'success': False, 'error': f'Failed to copy to clipboard: {str(e)}'}
+    
+    def paste_from_clipboard(self) -> Dict[str, Any]:
+        """
+        Get text from system clipboard using native clipboard access
+        
+        Returns:
+            {'success': bool, 'text': str, 'error': str (if failure)}
+        """
+        try:
+            text = pyperclip.paste()
+            return {'success': True, 'text': text}
+        except Exception as e:
+            return {'success': False, 'error': f'Failed to read from clipboard: {str(e)}'}
+    
     def import_mappings(self) -> Dict[str, Any]:
         """
-        Import field-to-suffix mappings from JSON file
+        Import field-to-suffix mappings from TSV text file or legacy JSON file
+        Supports both TSV (field<tab>suffix format) and JSON formats
         
         Returns:
             {
@@ -685,7 +730,7 @@ class DekeRekeAPI:
             result = webview.windows[0].create_file_dialog(
                 webview.OPEN_DIALOG,
                 allow_multiple=False,
-                file_types=('JSON Files (*.json)',)
+                file_types=('Text Files (*.txt)', 'JSON Files (*.json)', 'All Files (*.*)')
             )
             
             if not result or len(result) == 0:
@@ -693,15 +738,74 @@ class DekeRekeAPI:
             
             import_path = result[0]
             
-            # Read and parse JSON
+            # Read file content
             with open(import_path, 'r', encoding='utf-8') as f:
-                import_data = json.load(f)
+                content = f.read()
             
-            # Validate structure
-            if 'mappings' not in import_data or not isinstance(import_data['mappings'], dict):
-                return {'success': False, 'error': 'Invalid mapping file format'}
+            mappings = {}
             
-            mappings = import_data['mappings']
+            # Try JSON format first (legacy support)
+            try:
+                import_data = json.loads(content)
+                if 'mappings' in import_data and isinstance(import_data['mappings'], dict):
+                    # Valid JSON format
+                    mappings = import_data['mappings']
+                else:
+                    # Invalid JSON structure, try TSV
+                    raise ValueError('Invalid JSON structure')
+            except (json.JSONDecodeError, ValueError):
+                # Not JSON or invalid JSON, parse as TSV format
+                lines = content.split('\n')
+                for line_num, line in enumerate(lines, 1):
+                    line = line.rstrip('\r')
+                    
+                    # Skip completely empty lines
+                    if not line.strip():
+                        continue
+                    
+                    # Skip comments
+                    if line.strip().startswith('#'):
+                        continue
+                    
+                    # Check for tab separator
+                    if '\t' not in line:
+                        return {
+                            'success': False,
+                            'error': f'Invalid format at line {line_num}: expected field<tab>suffix (no tab found)'
+                        }
+                    
+                    parts = line.split('\t')
+                    if len(parts) != 2:
+                        return {
+                            'success': False,
+                            'error': f'Invalid format at line {line_num}: expected field<tab>suffix (found {len(parts)} parts)'
+                        }
+                    
+                    field, suffix = parts
+                    field = field.strip()
+                    suffix = suffix.strip()  # Allow empty suffix
+                    
+                    if not field:
+                        return {
+                            'success': False,
+                            'error': f'Empty field name at line {line_num}'
+                        }
+                    
+                    # Check for duplicate field mappings (Dekereke constraint: one field = one suffix)
+                    for existing_suffix, existing_fields in mappings.items():
+                        if field in existing_fields:
+                            suffix_display = existing_suffix if existing_suffix else '(no suffix)'
+                            new_suffix_display = suffix if suffix else '(no suffix)'
+                            return {
+                                'success': False,
+                                'error': f'Line {line_num}: Field "{field}" is already mapped to suffix "{suffix_display}". Each field can only have one suffix.'
+                            }
+                    
+                    # Build suffix -> [fields] mapping (suffix can be empty string)
+                    if suffix not in mappings:
+                        mappings[suffix] = []
+                    if field not in mappings[suffix]:
+                        mappings[suffix].append(field)
             
             # Update state
             self.suffix_mappings = mappings
@@ -715,8 +819,6 @@ class DekeRekeAPI:
                 'count': len(mappings)
             }
             
-        except json.JSONDecodeError as e:
-            return {'success': False, 'error': f'Invalid JSON format: {str(e)}'}
         except Exception as e:
             return {'success': False, 'error': f'Error importing mappings: {str(e)}'}
     

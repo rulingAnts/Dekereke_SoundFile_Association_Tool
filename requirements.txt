@@ -4,6 +4,9 @@
 # Desktop GUI framework
 pywebview>=4.0.0
 
+# Clipboard support (cross-platform)
+pyperclip>=1.8.0
+
 # XML processing
 lxml>=4.9.0
 
