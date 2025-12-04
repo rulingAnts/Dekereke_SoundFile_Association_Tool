@@ -7,6 +7,7 @@ import webview
 import os
 import json
 from typing import Dict, List, Optional, Any
+from urllib.parse import quote
 from datetime import datetime
 import uuid
 import shutil
@@ -408,7 +409,11 @@ class DekeRekeAPI:
             if not os.path.exists(file_path):
                 return {'success': False, 'error': 'File not found'}
             
-            return {'success': True, 'path': file_path}
+            # Build a properly encoded file URL for WebView/HTML5 Audio
+            # Use three slashes for absolute paths (file:///Users/...)
+            encoded_path = quote(file_path)
+            file_url = f"file:///{encoded_path.lstrip('/')}"
+            return {'success': True, 'path': file_path, 'url': file_url}
             
         except Exception as e:
             return {'success': False, 'error': str(e)}

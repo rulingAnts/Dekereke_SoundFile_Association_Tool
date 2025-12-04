@@ -2257,12 +2257,18 @@ window.playAudioFile = async function(filename) {
         const result = await window.pywebview.api.get_audio_file_path(filename);
         
         if (result.success) {
-            const audio = new Audio(`file://${result.path}`);
+            const url = result.url || encodeURI(`file://${result.path}`);
+            const audio = new Audio(url);
+            audio.preload = 'auto';
             state.currentAudio = audio;
             
             audio.play().catch(error => {
                 console.error('Error playing audio:', error);
-                showError('Could not play audio file');
+                showError(`Could not play audio file. URL: ${url}`);
+            });
+            audio.addEventListener('error', (e) => {
+                console.error('Audio element error', e);
+                showError(`Audio element error. URL: ${url}`);
             });
             
             audio.onended = () => {
