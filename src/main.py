@@ -1,5 +1,5 @@
 """
-Main Application for Dekereke Sound File Association Tool
+Main Application for Dekereke Sound File Utility
 Uses pywebview for desktop GUI with Python backend
 """
 
@@ -1312,7 +1312,7 @@ def main():
     
     # Create window with the API
     window = webview.create_window(
-        'Dekereke Sound File Association Tool',
+        'Dekereke Sound File Utility',
         html_path,
         js_api=api,
         width=1200,

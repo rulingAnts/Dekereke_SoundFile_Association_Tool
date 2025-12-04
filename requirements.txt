@@ -1,4 +1,4 @@
-# Dekereke Sound File Association Tool
+# Dekereke Sound File Utility
 # Python 3.8+ required
 
 # Desktop GUI framework
