@@ -2170,10 +2170,26 @@ function showColumnSettings() {
 function toggleFilters() {
     const filterPane = document.getElementById('filter-pane');
     filterPane.classList.toggle('hidden');
+    if (!filterPane.classList.contains('hidden')) {
+        renderFiltersUI();
+    }
 }
 
 // Apply filters
 async function applyFilters() {
+    // Collect filters from UI
+    const rows = document.querySelectorAll('#filter-conditions .filter-row');
+    const filters = [];
+    rows.forEach(row => {
+        const target = row.querySelector('.filter-target').value;
+        const name = row.querySelector('.filter-name').value;
+        const operator = row.querySelector('.filter-operator').value;
+        const valueInput = row.querySelector('.filter-value');
+        const value = valueInput ? valueInput.value : '';
+        filters.push({ target, name, operator, value });
+    });
+    state.filters = filters;
+    
     // Save filters to backend
     try {
         await window.pywebview.api.save_datasheet_settings(state.filters, state.visibleColumns);
@@ -2191,18 +2207,129 @@ async function clearFilters() {
     
     // Save cleared filters
     try {
-        await window.pywebview.api.save_datasheet_settings(state.filters, state.visibleColumns);
+        await window.pywebview.api.save_datasheet_settings(state.filters, state.visible_columns);
     } catch (error) {
         console.error('Error saving filters:', error);
     }
+    
+    // Clear UI
+    const container = document.getElementById('filter-conditions');
+    if (container) container.innerHTML = '';
     
     buildDataSheet();
 }
 
 // Apply filters to records
 function applyFiltersToRecords(records) {
-    // TODO: Implement filter logic
-    return records;
+    const filters = state.filters || [];
+    if (!filters.length) return records;
+    const caseSensitive = !!state.caseSensitive;
+    
+    function matchValue(val, operator, target) {
+        const v = val ?? '';
+        const t = target ?? '';
+        const VV = caseSensitive ? v : String(v).toLowerCase();
+        const TT = caseSensitive ? t : String(t).toLowerCase();
+        switch (operator) {
+            case 'equals': return VV === TT;
+            case 'not_equals': return VV !== TT;
+            case 'contains': return TT.includes(VV);
+            case 'not_contains': return !TT.includes(VV);
+            case 'empty': return (TT === '' || TT == null);
+            case 'not_empty': return !(TT === '' || TT == null);
+            case 'in_list': {
+                const list = (v || '').split(',').map(s => caseSensitive ? s.trim() : s.trim().toLowerCase());
+                return list.includes(TT);
+            }
+            case 'not_in_list': {
+                const list = (v || '').split(',').map(s => caseSensitive ? s.trim() : s.trim().toLowerCase());
+                return !list.includes(TT);
+            }
+            default: return true;
+        }
+    }
+    
+    return records.filter(rec => {
+        return filters.every(f => {
+            if (f.target === 'group') {
+                const fields = state.fieldGroups?.[f.name] || [];
+                // Group filter matches if ANY field in group satisfies condition
+                return fields.some(fn => matchValue(f.value, f.operator, rec[fn]));
+            } else {
+                return matchValue(f.value, f.operator, rec[f.name]);
+            }
+        });
+    });
+}
+
+function renderFiltersUI() {
+    const container = document.getElementById('filter-conditions');
+    if (!container) return;
+    container.innerHTML = '';
+    const filters = state.filters || [];
+    filters.forEach(f => container.appendChild(createFilterRow(f)));
+    if (filters.length === 0) {
+        container.appendChild(createFilterRow());
+    }
+}
+
+function addFilterRow() {
+    const container = document.getElementById('filter-conditions');
+    if (!container) return;
+    container.appendChild(createFilterRow());
+}
+
+function createFilterRow(prefill) {
+    const row = document.createElement('div');
+    row.className = 'filter-row';
+    
+    const targetSel = document.createElement('select');
+    targetSel.className = 'filter-target';
+    ['field','group'].forEach(opt => {
+        const o = document.createElement('option'); o.value = opt; o.textContent = opt === 'field' ? 'Field' : 'Group';
+        targetSel.appendChild(o);
+    });
+    
+    const nameSel = document.createElement('select');
+    nameSel.className = 'filter-name';
+    const fieldNames = ['Reference'];
+    const mapped = new Set();
+    for (const suffix in state.suffixMappings) state.suffixMappings[suffix].forEach(f => mapped.add(f));
+    Array.from(mapped).sort().forEach(n => fieldNames.push(n));
+    const groupNames = Object.keys(state.fieldGroups || {});
+    function populateNames() {
+        nameSel.innerHTML = '';
+        const list = targetSel.value === 'group' ? groupNames : fieldNames;
+        list.forEach(n => { const o = document.createElement('option'); o.value = n; o.textContent = n; nameSel.appendChild(o); });
+    }
+    populateNames();
+    targetSel.addEventListener('change', populateNames);
+    
+    const opSel = document.createElement('select');
+    opSel.className = 'filter-operator';
+    ['equals','not_equals','contains','not_contains','empty','not_empty','in_list','not_in_list'].forEach(op => {
+        const o = document.createElement('option'); o.value = op; o.textContent = op.replace('_',' '); opSel.appendChild(o);
+    });
+    
+    const val = document.createElement('input');
+    val.type = 'text'; val.placeholder = 'value (comma-separated for lists)'; val.className = 'filter-value';
+    
+    const rm = document.createElement('button'); rm.className = 'btn-small btn-secondary'; rm.textContent = 'Remove'; rm.addEventListener('click', () => row.remove());
+    
+    if (prefill) {
+        targetSel.value = prefill.target || 'field';
+        populateNames();
+        nameSel.value = prefill.name || nameSel.value;
+        opSel.value = prefill.operator || 'equals';
+        val.value = prefill.value || '';
+    }
+    
+    row.appendChild(targetSel);
+    row.appendChild(nameSel);
+    row.appendChild(opSel);
+    row.appendChild(val);
+    row.appendChild(rm);
+    return row;
 }
 
 // Check for suggested matches
@@ -2264,11 +2391,14 @@ window.playAudioFile = async function(filename) {
             
             audio.play().catch(error => {
                 console.error('Error playing audio:', error);
-                showError(`Could not play audio file. URL: ${url}`);
+                showError(`Could not play audio file. URL: ${url}. Trying alternate method...`);
+                // Fallback: request data URL and play
+                fallbackPlayAudio(filename);
             });
             audio.addEventListener('error', (e) => {
                 console.error('Audio element error', e);
-                showError(`Audio element error. URL: ${url}`);
+                showError(`Audio element error. URL: ${url}. Trying alternate method...`);
+                fallbackPlayAudio(filename);
             });
             
             audio.onended = () => {
@@ -2367,6 +2497,27 @@ function showDuplicateWarning(duplicates) {
     list.innerHTML += '</ul>';
     
     warning.classList.remove('hidden');
+}
+
+async function fallbackPlayAudio(filename) {
+    try {
+        const data = await window.pywebview.api.get_audio_data_url(filename);
+        if (data && data.success && data.url) {
+            const audio = new Audio(data.url);
+            audio.preload = 'auto';
+            state.currentAudio = audio;
+            audio.play().catch(err => {
+                console.error('Fallback audio play failed:', err);
+                showError('Fallback audio play failed');
+            });
+            audio.onended = () => { state.currentAudio = null; };
+        } else {
+            showError('Unable to build audio data URL');
+        }
+    } catch (e) {
+        console.error('Error in fallback audio:', e);
+        showError('Error in fallback audio: ' + e.message);
+    }
 }
 
 // Show empty soundfile warning

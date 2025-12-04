@@ -191,9 +191,12 @@
                     <div id="filter-pane" class="filter-pane hidden">
                         <div class="filter-header">
                             <h4>Filters</h4>
-                            <button id="btn-clear-filters" class="btn-small">Clear All</button>
+                            <div style="display:flex; gap:0.5rem; align-items:center;">
+                                <button id="btn-add-filter" class="btn-small">Add Filter</button>
+                                <button id="btn-clear-filters" class="btn-small">Clear All</button>
+                            </div>
                         </div>
-                        <div id="filter-conditions"></div>
+                        <div id="filter-conditions" class="filter-conditions"></div>
                         <div class="button-row">
                             <button id="btn-apply-filters" class="btn-primary">Apply Filters</button>
                         </div>

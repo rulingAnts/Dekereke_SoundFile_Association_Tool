@@ -940,6 +940,30 @@ label input[type="checkbox"] {
     padding: 1rem;
     margin-top: 1rem;
 }
+.filter-conditions {
+    display: flex;
+    flex-direction: column;
+    gap: 0.5rem;
+}
+
+.filter-row {
+    display: grid;
+    grid-template-columns: 160px 160px 1fr auto;
+    gap: 0.5rem;
+    align-items: center;
+}
+
+.filter-row input[type="text"], .filter-row select, .filter-row textarea {
+    padding: 0.375rem 0.5rem;
+    border: 1px solid var(--border-color);
+    border-radius: 6px;
+    font-size: 0.875rem;
+}
+
+.btn-small {
+    padding: 0.375rem 0.75rem;
+    font-size: 0.75rem;
+}
 
 .filter-header {
     display: flex;
