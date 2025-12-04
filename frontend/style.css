@@ -861,6 +861,18 @@ label input[type="checkbox"] {
     border: 2px dashed var(--primary-color);
 }
 
+/* Search highlighting */
+.datasheet-table td.search-highlight {
+    background-color: #fef08a !important; /* light yellow */
+    outline: 1px solid #eab308;
+}
+
+.datasheet-table td.search-current {
+    background-color: #fbbf24 !important; /* bright yellow */
+    outline: 2px solid #f59e0b;
+    box-shadow: 0 0 0 2px rgba(245, 158, 11, 0.2);
+}
+
 /* Orphaned Files Pane */
 .orphaned-pane {
     background-color: white;

@@ -252,6 +252,47 @@ class DekeRekeAPI:
         except Exception as e:
             return {'success': False, 'error': str(e)}
     
+    def rename_audio_file(self, old_name: str, new_name: str) -> Dict[str, Any]:
+        """
+        Rename an audio file in the audio folder
+        
+        Args:
+            old_name: Current filename
+            new_name: New filename
+            
+        Returns:
+            {'success': bool, 'error': str (if failure)}
+        """
+        try:
+            if not self.audio_scanner:
+                return {'success': False, 'error': 'Audio folder not loaded'}
+            
+            import os
+            audio_folder = self.audio_scanner.folder_path
+            old_path = os.path.join(audio_folder, old_name)
+            new_path = os.path.join(audio_folder, new_name)
+            
+            # Check if old file exists
+            if not os.path.exists(old_path):
+                return {'success': False, 'error': f'File not found: {old_name}'}
+            
+            # Check if new name already exists
+            if os.path.exists(new_path):
+                return {'success': False, 'error': f'File already exists: {new_name}'}
+            
+            # Rename the file
+            os.rename(old_path, new_path)
+            
+            # Update audio scanner's file list
+            if old_name in self.audio_scanner.audio_files:
+                self.audio_scanner.audio_files.remove(old_name)
+                self.audio_scanner.audio_files.append(new_name)
+            
+            return {'success': True}
+            
+        except Exception as e:
+            return {'success': False, 'error': str(e)}
+    
     def save_suffix_mappings(self, mappings: Dict[str, List[str]]):
         """
         Save suffix-to-field mappings
@@ -264,6 +305,28 @@ class DekeRekeAPI:
             self.settings_manager.settings['suffix_mappings'] = mappings
             self.settings_manager.save()
         self._save_app_settings()
+    
+    def save_excluded_suffixes(self, excluded: List[str]):
+        """
+        Save list of excluded suffixes
+        
+        Args:
+            excluded: list of suffix strings to exclude from unmatched pane
+        """
+        if self.settings_manager:
+            self.settings_manager.settings['excluded_suffixes'] = excluded
+            self.settings_manager.save()
+    
+    def get_excluded_suffixes(self) -> List[str]:
+        """
+        Get list of excluded suffixes
+        
+        Returns:
+            List of excluded suffix strings
+        """
+        if self.settings_manager:
+            return self.settings_manager.settings.get('excluded_suffixes', [])
+        return []
     
     def load_dekereke_settings(self) -> Dict[str, Any]:
         """
@@ -380,16 +443,19 @@ class DekeRekeAPI:
         self.app_settings['expectation_modes'] = modes
         self._save_app_settings()
     
-    def save_datasheet_settings(self, filters: List, visible_columns: List[str]):
+    def save_datasheet_settings(self, filters: List, visible_columns: List[str], column_order: List[str] = None):
         """
-        Save data sheet settings (filters and visible columns)
+        Save data sheet settings (filters, visible columns, and column order)
         
         Args:
             filters: list of filter conditions
             visible_columns: list of visible column names
+            column_order: list of column names in display order (optional)
         """
         self.app_settings['datasheet_filters'] = filters
         self.app_settings['visible_columns'] = visible_columns
+        if column_order is not None:
+            self.app_settings['column_order'] = column_order
         self._save_app_settings()
     
     def get_audio_file_path(self, filename: str) -> Dict[str, Any]:
@@ -535,7 +601,7 @@ class DekeRekeAPI:
                             if expected_filename in self.audio_scanner.audio_files:
                                 matched_files[(idx, field_name, suffix)] = expected_filename
                 
-                # Also check SoundFile field for empty suffix (whole record)
+                # Also check SoundFile field for empty suffix (base filename)
                 if '' in self.suffix_mappings:
                     # Empty suffix means the base filename itself
                     if base_filename in self.audio_scanner.audio_files:
@@ -557,7 +623,8 @@ class DekeRekeAPI:
                 'mapped_fields': mapped_fields,  # Already converted to list at line 424
                 'matched_files': {f"{k[0]}_{k[1]}_{k[2]}": v for k, v in matched_files.items()},
                 'expected_files': {f"{k[0]}_{k[1]}_{k[2]}": v for k, v in expected_files.items()},
-                'orphaned_files': sorted(orphaned_files)
+                'orphaned_files': sorted(orphaned_files),
+                'column_order': self.app_settings.get('column_order', None)  # Include saved column order
             }
             
             print(f"DEBUG: Returning datasheet data:")
@@ -666,7 +733,7 @@ class DekeRekeAPI:
             for suffix, fields in mappings.items():
                 for field in fields:
                     line = f"{field}\t{suffix}"
-                    if suffix == '':  # Empty suffix (Whole Record)
+                    if suffix == '':  # Empty suffix (SoundFile)
                         empty_suffix_lines.append(line)
                     else:
                         lines.append(line)
@@ -831,6 +898,103 @@ class DekeRekeAPI:
         if self.settings_manager:
             return self.settings_manager.settings
         return {}
+    
+    def save_step3_progress(self, progress: Dict[str, Any]) -> Dict[str, Any]:
+        """
+        Save Step 3 progress (tentative associations, unlinks, saved files)
+        
+        Args:
+            progress: dict with tentativeAssociations, tentativeUnlinks, savedForLater
+            
+        Returns:
+            {'success': bool}
+        """
+        try:
+            if self.settings_manager:
+                self.settings_manager.settings['step3_progress'] = progress
+                self.settings_manager.save()
+            return {'success': True}
+        except Exception as e:
+            return {'success': False, 'error': str(e)}
+    
+    def load_step3_progress(self) -> Dict[str, Any]:
+        """
+        Load Step 3 progress from settings
+        
+        Returns:
+            {'success': bool, 'progress': dict}
+        """
+        try:
+            if self.settings_manager and 'step3_progress' in self.settings_manager.settings:
+                return {
+                    'success': True,
+                    'progress': self.settings_manager.settings['step3_progress']
+                }
+            return {'success': True, 'progress': None}
+        except Exception as e:
+            return {'success': False, 'error': str(e)}
+    
+    def export_step3_progress(self, progress: Dict[str, Any]) -> Dict[str, Any]:
+        """
+        Export Step 3 progress to JSON file
+        
+        Args:
+            progress: dict with tentativeAssociations, tentativeUnlinks, savedForLater
+            
+        Returns:
+            {'success': bool, 'error': str (if failure)}
+        """
+        try:
+            result = webview.windows[0].create_file_dialog(
+                webview.SAVE_DIALOG,
+                save_filename='dekereke-progress.json',
+                file_types=('JSON Files (*.json)',)
+            )
+            
+            if not result:
+                return {'success': False, 'error': 'No file selected'}
+            
+            save_path = result
+            
+            with open(save_path, 'w', encoding='utf-8') as f:
+                json.dump(progress, f, indent=2, ensure_ascii=False)
+            
+            return {'success': True, 'path': save_path}
+            
+        except Exception as e:
+            return {'success': False, 'error': f'Error exporting progress: {str(e)}'}
+    
+    def import_step3_progress(self) -> Dict[str, Any]:
+        """
+        Import Step 3 progress from JSON file
+        
+        Returns:
+            {'success': bool, 'progress': dict, 'error': str (if failure)}
+        """
+        try:
+            result = webview.windows[0].create_file_dialog(
+                webview.OPEN_DIALOG,
+                allow_multiple=False,
+                file_types=('JSON Files (*.json)',)
+            )
+            
+            if not result or len(result) == 0:
+                return {'success': False, 'error': 'No file selected'}
+            
+            import_path = result[0]
+            
+            with open(import_path, 'r', encoding='utf-8') as f:
+                progress = json.load(f)
+            
+            return {
+                'success': True,
+                'progress': progress
+            }
+            
+        except json.JSONDecodeError as e:
+            return {'success': False, 'error': f'Invalid JSON format: {str(e)}'}
+        except Exception as e:
+            return {'success': False, 'error': f'Error importing progress: {str(e)}'}
     
     def export_conditions(self, conditions: Dict[str, Any]) -> Dict[str, Any]:
         """

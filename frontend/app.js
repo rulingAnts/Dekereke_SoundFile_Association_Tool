@@ -16,6 +16,9 @@ const state = {
     operationQueue: [],
     currentScreen: 'setup',
     
+    // Step 1 data
+    excludedSuffixes: new Set(),  // Set of suffixes to exclude from unmatched files
+    
     // Step 3 data
     datasheetData: null,
     visibleColumns: [],
@@ -25,7 +28,13 @@ const state = {
     filters: [],
     tentativeAssociations: {},  // {orphanedFile: {recordIdx, field, suffix, newName}}
     tentativeUnlinks: {},  // {originalFile: {recordIdx, field, suffix, unlinkTo}}
+    savedForLater: new Set(),  // Set of filenames saved for later
+    noLongerNeeded: new Set(),  // Set of filenames no longer needed
     activeModal: null,
+    
+    // Search
+    searchResults: [],
+    searchCurrentIndex: -1,
     
     // Audio playback
     autoPlayAudio: true,
@@ -204,6 +213,7 @@ function setupEventListeners() {
     document.getElementById('btn-copy-mappings').addEventListener('click', copyMappings);
     document.getElementById('btn-paste-mappings').addEventListener('click', pasteMappings);
     document.getElementById('btn-clear-mappings').addEventListener('click', clearMappings);
+    document.getElementById('btn-inspect-suffixes').addEventListener('click', showInspectSuffixesModal);
     document.getElementById('btn-save-mappings').addEventListener('click', saveMappings);
     document.getElementById('btn-proceed-to-step2').addEventListener('click', () => {
         showScreen('step2');
@@ -216,20 +226,7 @@ function setupEventListeners() {
     document.getElementById('btn-save-conditions').addEventListener('click', saveConditions);
     document.getElementById('btn-proceed-to-step3').addEventListener('click', () => showScreen('step3'));
 
-    // Step 3
-    document.getElementById('btn-accept-suggestions').addEventListener('click', acceptSuggestions);
-    document.getElementById('btn-skip-suggestions').addEventListener('click', () => {
-        document.getElementById('step3-suggested').classList.add('hidden');
-    });
-    document.getElementById('btn-column-settings').addEventListener('click', showColumnSettings);
-    document.getElementById('btn-toggle-filters').addEventListener('click', toggleFilters);
-    document.getElementById('btn-clear-tentative').addEventListener('click', clearAllTentative);
-    document.getElementById('btn-apply-filters').addEventListener('click', applyFilters);
-    document.getElementById('btn-clear-filters').addEventListener('click', clearFilters);
-    document.getElementById('chk-auto-play').addEventListener('change', (e) => {
-        state.autoPlayAudio = e.target.checked;
-    });
-    document.getElementById('btn-proceed-to-review').addEventListener('click', () => showScreen('review'));
+    // Step 3 event listeners are set up in setupStep3EventListeners() when Step 3 loads
 
     // Review
     document.getElementById('btn-execute').addEventListener('click', showBackupWarning);
@@ -351,6 +348,20 @@ async function proceedToStep1() {
         if (result.success) {
             state.suffixes = result.suffixes;
             
+            // Auto-map empty suffix to SoundFile (not user-configurable)
+            if ('' in state.suffixes) {
+                state.suffixMappings[''] = ['SoundFile'];
+            }
+            
+            // Load excluded suffixes from settings
+            try {
+                const excludedList = await window.pywebview.api.get_excluded_suffixes();
+                state.excludedSuffixes = new Set(excludedList || []);
+            } catch (error) {
+                console.log('Could not load excluded suffixes:', error);
+                state.excludedSuffixes = new Set();
+            }
+            
             // Check for ambiguous cases
             if (result.ambiguous_cases && result.ambiguous_cases.length > 0) {
                 showAmbiguousWarning(result.ambiguous_cases);
@@ -364,6 +375,9 @@ async function proceedToStep1() {
             
             // Build mapping UI
             buildMappingUI();
+            
+            // Enable inspect suffixes button
+            document.getElementById('btn-inspect-suffixes').disabled = false;
             
             // Enable navigation and show Step 1
             document.getElementById('nav-step1').disabled = false;
@@ -386,8 +400,10 @@ function buildMappingUI() {
     suffixList.innerHTML = '';
     fieldList.innerHTML = '';
     
-    // Add suffixes
+    // Add suffixes (exclude empty suffix - auto-mapped to SoundFile)
     for (const suffix in state.suffixes) {
+        if (suffix === '') continue;  // Skip empty suffix - auto-mapped
+        
         const item = document.createElement('div');
         item.className = 'draggable-item droppable-item';
         item.draggable = true;
@@ -402,11 +418,17 @@ function buildMappingUI() {
         item.addEventListener('dragover', handleDragOver);
         item.addEventListener('drop', handleDrop);
         
+        // Click to inspect this suffix's files
+        item.addEventListener('dblclick', () => {
+            showSuffixFilesModal(suffix);
+        });
+        item.title = 'Double-click to inspect files with this suffix';
+        
         suffixList.appendChild(item);
     }
     
-    // Add fields (including "whole record")
-    const fields = ['Whole Record', ...state.fieldNames];
+    // Add fields (SoundFile is automatically mapped to empty suffix)
+    const fields = [...state.fieldNames];
     for (const field of fields) {
         const item = document.createElement('div');
         item.className = 'draggable-item droppable-item';
@@ -454,6 +476,10 @@ function refreshMappingTiles() {
             );
             
             if (!suffixItem || !fieldItem) {
+                // Skip empty suffix (auto-mapped to SoundFile, not shown in UI)
+                if (suffix === '' && field === 'SoundFile') {
+                    continue;
+                }
                 console.warn(`Could not find items for mapping: ${suffix} -> ${field}`)
                 continue;
             }
@@ -674,7 +700,7 @@ async function copyMappings() {
             const fields = state.suffixMappings[suffix];
             for (const field of fields) {
                 const line = `${field}\t${suffix}`;
-                if (suffix === '') {  // Empty suffix (Whole Record)
+                if (suffix === '') {  // Empty suffix (SoundFile)
                     emptySuffixLines.push(line);
                 } else {
                     lines.push(line);
@@ -829,11 +855,307 @@ async function clearMappings() {
     }
 }
 
+// Show inspect suffixes modal (overview of all suffixes)
+function showInspectSuffixesModal() {
+    if (!state.suffixes || Object.keys(state.suffixes).length === 0) {
+        showError('No suffixes extracted yet. Please extract suffixes first.');
+        return;
+    }
+    
+    const modal = document.createElement('div');
+    modal.className = 'modal';
+    modal.innerHTML = `
+        <div class="modal-content" style="max-width: 800px; max-height: 80vh;">
+            <h3>🔍 Inspect Suffixes</h3>
+            <p>Click any suffix to view and rename its files. Check "Exclude" to hide files with that suffix from the Unmatched pane.</p>
+            <div style="max-height: 60vh; overflow-y: auto; margin: 1rem 0;">
+                <table style="width: 100%; border-collapse: collapse;">
+                    <thead>
+                        <tr style="background: #f3f4f6; position: sticky; top: 0;">
+                            <th style="padding: 0.5rem; text-align: left; border-bottom: 2px solid #e5e7eb;">Suffix</th>
+                            <th style="padding: 0.5rem; text-align: right; border-bottom: 2px solid #e5e7eb;">File Count</th>
+                            <th style="padding: 0.5rem; text-align: center; border-bottom: 2px solid #e5e7eb;">Exclude</th>
+                            <th style="padding: 0.5rem; text-align: center; border-bottom: 2px solid #e5e7eb;">Actions</th>
+                        </tr>
+                    </thead>
+                    <tbody id="suffix-inspect-list"></tbody>
+                </table>
+            </div>
+            <div class="button-row">
+                <button id="btn-re-extract" class="btn-secondary">Re-extract Suffixes</button>
+                <button id="btn-close-inspect" class="btn-secondary">Close</button>
+            </div>
+        </div>
+    `;
+    
+    document.body.appendChild(modal);
+    
+    const list = modal.querySelector('#suffix-inspect-list');
+    
+    // Sort suffixes by file count (descending), exclude empty suffix (auto-mapped)
+    const sortedSuffixes = Object.entries(state.suffixes)
+        .filter(([suffix]) => suffix !== '')  // Exclude empty suffix
+        .sort((a, b) => b[1].length - a[1].length);
+    
+    sortedSuffixes.forEach(([suffix, files]) => {
+        const row = document.createElement('tr');
+        row.style.borderBottom = '1px solid #e5e7eb';
+        row.style.cursor = 'pointer';
+        
+        const suffixCell = document.createElement('td');
+        suffixCell.style.padding = '0.5rem';
+        suffixCell.textContent = suffix || '(no suffix)';
+        suffixCell.style.fontFamily = 'monospace';
+        
+        const countCell = document.createElement('td');
+        countCell.style.padding = '0.5rem';
+        countCell.style.textAlign = 'right';
+        countCell.textContent = files.length;
+        
+        const excludeCell = document.createElement('td');
+        excludeCell.style.padding = '0.5rem';
+        excludeCell.style.textAlign = 'center';
+        
+        const excludeCheckbox = document.createElement('input');
+        excludeCheckbox.type = 'checkbox';
+        excludeCheckbox.checked = state.excludedSuffixes.has(suffix);
+        excludeCheckbox.style.width = '18px';
+        excludeCheckbox.style.height = '18px';
+        excludeCheckbox.style.cursor = 'pointer';
+        excludeCheckbox.addEventListener('click', (e) => {
+            e.stopPropagation();
+        });
+        excludeCheckbox.addEventListener('change', async (e) => {
+            if (e.target.checked) {
+                state.excludedSuffixes.add(suffix);
+            } else {
+                state.excludedSuffixes.delete(suffix);
+            }
+            
+            // Save to backend
+            await window.pywebview.api.save_excluded_suffixes(Array.from(state.excludedSuffixes));
+            
+            // Update unmatched files if in Step 3
+            if (state.datasheetData) {
+                renderOrphanedFiles();
+            }
+        });
+        
+        excludeCell.appendChild(excludeCheckbox);
+        
+        const actionCell = document.createElement('td');
+        actionCell.style.padding = '0.5rem';
+        actionCell.style.textAlign = 'center';
+        
+        const viewBtn = document.createElement('button');
+        viewBtn.textContent = 'View Files';
+        viewBtn.className = 'btn-small btn-secondary';
+        viewBtn.addEventListener('click', (e) => {
+            e.stopPropagation();
+            showSuffixFilesModal(suffix);
+        });
+        
+        actionCell.appendChild(viewBtn);
+        
+        row.appendChild(suffixCell);
+        row.appendChild(countCell);
+        row.appendChild(excludeCell);
+        row.appendChild(actionCell);
+        
+        row.addEventListener('click', () => {
+            showSuffixFilesModal(suffix);
+        });
+        
+        row.addEventListener('mouseenter', () => row.style.background = '#f9fafb');
+        row.addEventListener('mouseleave', () => row.style.background = 'white');
+        
+        list.appendChild(row);
+    });
+    
+    modal.querySelector('#btn-re-extract').addEventListener('click', async () => {
+        modal.remove();
+        await proceedToStep1();
+    });
+    
+    modal.querySelector('#btn-close-inspect').addEventListener('click', () => {
+        modal.remove();
+    });
+}
+
+// Show files for a specific suffix with rename capability
+function showSuffixFilesModal(suffix) {
+    if (!state.suffixes || !state.suffixes[suffix]) {
+        showError('Suffix not found');
+        return;
+    }
+    
+    const files = state.suffixes[suffix];
+    const displaySuffix = suffix || '(no suffix)';
+    
+    const modal = document.createElement('div');
+    modal.className = 'modal';
+    modal.innerHTML = `
+        <div class="modal-content" style="max-width: 800px; max-height: 80vh;">
+            <h3>Files with suffix: <code style="background: #f3f4f6; padding: 0.25rem 0.5rem; border-radius: 3px;">${displaySuffix}</code></h3>
+            <p>${files.length} file(s)</p>
+            <div style="max-height: 50vh; overflow-y: auto; margin: 1rem 0; border: 1px solid #e5e7eb; border-radius: 4px;">
+                <div id="suffix-file-list"></div>
+            </div>
+            <div class="button-row">
+                <button id="btn-close-suffix-files" class="btn-secondary">Close</button>
+            </div>
+        </div>
+    `;
+    
+    document.body.appendChild(modal);
+    
+    const fileList = modal.querySelector('#suffix-file-list');
+    
+    files.forEach(filename => {
+        const fileItem = document.createElement('div');
+        fileItem.style.cssText = 'display: flex; align-items: center; gap: 0.5rem; padding: 0.5rem; border-bottom: 1px solid #f3f4f6;';
+        fileItem.dataset.filename = filename;
+        
+        const playBtn = document.createElement('button');
+        playBtn.textContent = '▶';
+        playBtn.className = 'btn-small btn-secondary';
+        playBtn.style.minWidth = '0';
+        playBtn.style.padding = '0.25rem 0.5rem';
+        playBtn.addEventListener('click', () => {
+            playAudioFile(filename);
+        });
+        
+        const nameSpan = document.createElement('span');
+        nameSpan.textContent = filename;
+        nameSpan.style.flex = '1';
+        nameSpan.style.fontFamily = 'monospace';
+        nameSpan.style.fontSize = '0.9rem';
+        
+        const renameBtn = document.createElement('button');
+        renameBtn.textContent = '✏️ Rename';
+        renameBtn.className = 'btn-small btn-secondary';
+        renameBtn.addEventListener('click', () => {
+            showRenameFileDialog(filename, suffix);
+        });
+        
+        fileItem.appendChild(playBtn);
+        fileItem.appendChild(nameSpan);
+        fileItem.appendChild(renameBtn);
+        
+        // Double-click to play
+        fileItem.addEventListener('dblclick', () => {
+            playAudioFile(filename);
+        });
+        
+        fileItem.addEventListener('mouseenter', () => fileItem.style.background = '#f9fafb');
+        fileItem.addEventListener('mouseleave', () => fileItem.style.background = 'white');
+        
+        fileList.appendChild(fileItem);
+    });
+    
+    modal.querySelector('#btn-close-suffix-files').addEventListener('click', () => {
+        modal.remove();
+    });
+}
+
+// Show rename file dialog
+function showRenameFileDialog(oldFilename, suffix) {
+    const modal = document.createElement('div');
+    modal.className = 'modal';
+    modal.innerHTML = `
+        <div class="modal-content" style="max-width: 600px;">
+            <h3>Rename File</h3>
+            <p>Current name: <code style="background: #f3f4f6; padding: 0.25rem 0.5rem;">${oldFilename}</code></p>
+            <div style="margin: 1rem 0;">
+                <label style="display: block; margin-bottom: 0.5rem; font-weight: 500;">New filename:</label>
+                <input type="text" id="new-filename-input" value="${oldFilename}" 
+                       style="width: 100%; padding: 0.5rem; border: 1px solid #d1d5db; border-radius: 4px; font-family: monospace;">
+                <p style="margin-top: 0.5rem; font-size: 0.85rem; color: #6b7280;">
+                    Include the file extension (.wav, .mp3, etc.)
+                </p>
+            </div>
+            <div class="button-row">
+                <button id="btn-do-rename" class="btn-primary">Rename</button>
+                <button id="btn-cancel-rename" class="btn-secondary">Cancel</button>
+            </div>
+        </div>
+    `;
+    
+    document.body.appendChild(modal);
+    
+    const input = modal.querySelector('#new-filename-input');
+    input.focus();
+    input.select();
+    
+    const doRename = async () => {
+        const newFilename = input.value.trim();
+        
+        if (!newFilename) {
+            showError('Filename cannot be empty');
+            return;
+        }
+        
+        if (newFilename === oldFilename) {
+            modal.remove();
+            return;
+        }
+        
+        showLoading('Renaming file...');
+        
+        try {
+            const result = await window.pywebview.api.rename_audio_file(oldFilename, newFilename);
+            
+            if (result.success) {
+                // Update state.suffixes
+                if (state.suffixes[suffix]) {
+                    const idx = state.suffixes[suffix].indexOf(oldFilename);
+                    if (idx !== -1) {
+                        state.suffixes[suffix][idx] = newFilename;
+                    }
+                }
+                
+                modal.remove();
+                
+                // Close parent modals and re-extract suffixes
+                document.querySelectorAll('.modal').forEach(m => m.remove());
+                
+                showSuccess(`Renamed to ${newFilename}. Re-extracting suffixes...`);
+                await proceedToStep1();
+            } else {
+                showError(result.error || 'Failed to rename file');
+            }
+        } catch (error) {
+            showError('Error renaming file: ' + error);
+        } finally {
+            hideLoading();
+        }
+    };
+    
+    modal.querySelector('#btn-do-rename').addEventListener('click', doRename);
+    modal.querySelector('#btn-cancel-rename').addEventListener('click', () => {
+        modal.remove();
+    });
+    
+    input.addEventListener('keydown', (e) => {
+        if (e.key === 'Enter') {
+            doRename();
+        } else if (e.key === 'Escape') {
+            modal.remove();
+        }
+    });
+}
+
 // Save mappings
 async function saveMappings() {
-    // Check for unmapped suffixes
+    // Ensure empty suffix is mapped to SoundFile
+    if ('' in state.suffixes) {
+        state.suffixMappings[''] = ['SoundFile'];
+    }
+    
+    // Check for unmapped suffixes (excluding empty suffix)
     const unmappedSuffixes = [];
     for (const suffix in state.suffixes) {
+        if (suffix === '') continue;  // Skip empty suffix - auto-mapped
         if (!state.suffixMappings[suffix] || state.suffixMappings[suffix].length === 0) {
             unmappedSuffixes.push(suffix || '(no suffix)');
         }
@@ -1661,7 +1983,24 @@ async function loadStep3Data() {
             
             // Initialize column visibility (show mapped fields by default)
             state.visibleColumns = ['Reference', ...result.mapped_fields];
-            state.columnOrder = [...state.visibleColumns];
+            
+            // Initialize column order from saved settings, or use default
+            if (result.column_order && Array.isArray(result.column_order)) {
+                state.columnOrder = result.column_order;
+                // Update visibleColumns to match saved order (in case columns were added/removed)
+                state.visibleColumns = state.columnOrder.filter(col => 
+                    col === 'Reference' || result.mapped_fields.includes(col)
+                );
+            } else {
+                // No saved order, use default
+                state.columnOrder = [...state.visibleColumns];
+            }
+            
+            // Set up event listeners for Step 3 (only once UI is ready)
+            setupStep3EventListeners();
+            
+            // Load saved progress
+            await loadStep3Progress();
             
             // Build data sheet
             buildDataSheet();
@@ -1676,6 +2015,281 @@ async function loadStep3Data() {
         showError('Error loading Step 3: ' + error);
     } finally {
         hideLoading();
+    }
+}
+
+// Set up Step 3 event listeners (called when Step 3 loads)
+function setupStep3EventListeners() {
+    // Remove any existing listeners to prevent duplicates
+    const acceptBtn = document.getElementById('btn-accept-suggestions');
+    const skipBtn = document.getElementById('btn-skip-suggestions');
+    const columnBtn = document.getElementById('btn-column-settings');
+    const filterBtn = document.getElementById('btn-toggle-filters');
+    const clearBtn = document.getElementById('btn-clear-tentative');
+    const exportBtn = document.getElementById('btn-export-progress');
+    const importBtn = document.getElementById('btn-import-progress');
+    const resetBtn = document.getElementById('btn-reset-progress');
+    const applyFilterBtn = document.getElementById('btn-apply-filters');
+    const clearFilterBtn = document.getElementById('btn-clear-filters');
+    const autoPlayChk = document.getElementById('chk-auto-play');
+    const reviewBtn = document.getElementById('btn-proceed-to-review');
+    
+    // Clone and replace to remove old listeners
+    if (acceptBtn) {
+        const newAcceptBtn = acceptBtn.cloneNode(true);
+        acceptBtn.replaceWith(newAcceptBtn);
+        newAcceptBtn.addEventListener('click', acceptSuggestions);
+    }
+    
+    if (skipBtn) {
+        const newSkipBtn = skipBtn.cloneNode(true);
+        skipBtn.replaceWith(newSkipBtn);
+        newSkipBtn.addEventListener('click', () => {
+            document.getElementById('step3-suggested').classList.add('hidden');
+        });
+    }
+    
+    if (columnBtn) {
+        const newColumnBtn = columnBtn.cloneNode(true);
+        columnBtn.replaceWith(newColumnBtn);
+        newColumnBtn.addEventListener('click', showColumnSettings);
+    }
+    
+    if (filterBtn) {
+        const newFilterBtn = filterBtn.cloneNode(true);
+        filterBtn.replaceWith(newFilterBtn);
+        newFilterBtn.addEventListener('click', toggleFilters);
+    }
+    
+    if (clearBtn) {
+        const newClearBtn = clearBtn.cloneNode(true);
+        clearBtn.replaceWith(newClearBtn);
+        newClearBtn.addEventListener('click', clearAllTentative);
+    }
+    
+    if (exportBtn) {
+        const newExportBtn = exportBtn.cloneNode(true);
+        exportBtn.replaceWith(newExportBtn);
+        newExportBtn.addEventListener('click', exportProgress);
+    }
+    
+    if (importBtn) {
+        const newImportBtn = importBtn.cloneNode(true);
+        importBtn.replaceWith(newImportBtn);
+        newImportBtn.addEventListener('click', importProgress);
+    }
+    
+    if (resetBtn) {
+        const newResetBtn = resetBtn.cloneNode(true);
+        resetBtn.replaceWith(newResetBtn);
+        newResetBtn.addEventListener('click', resetProgress);
+    }
+    
+    if (applyFilterBtn) {
+        const newApplyFilterBtn = applyFilterBtn.cloneNode(true);
+        applyFilterBtn.replaceWith(newApplyFilterBtn);
+        newApplyFilterBtn.addEventListener('click', applyFilters);
+    }
+    
+    if (clearFilterBtn) {
+        const newClearFilterBtn = clearFilterBtn.cloneNode(true);
+        clearFilterBtn.replaceWith(newClearFilterBtn);
+        newClearFilterBtn.addEventListener('click', clearFilters);
+    }
+    
+    if (autoPlayChk) {
+        const newAutoPlayChk = autoPlayChk.cloneNode(true);
+        autoPlayChk.replaceWith(newAutoPlayChk);
+        newAutoPlayChk.addEventListener('change', (e) => {
+            state.autoPlayAudio = e.target.checked;
+        });
+        // Restore checked state
+        newAutoPlayChk.checked = state.autoPlayAudio;
+    }
+    
+    if (reviewBtn) {
+        const newReviewBtn = reviewBtn.cloneNode(true);
+        reviewBtn.replaceWith(newReviewBtn);
+        newReviewBtn.addEventListener('click', () => showScreen('review'));
+    }
+    
+    // Search functionality
+    const searchFieldSelect = document.getElementById('search-field-select');
+    const searchInput = document.getElementById('search-input');
+    const searchPrevBtn = document.getElementById('btn-search-prev');
+    const searchNextBtn = document.getElementById('btn-search-next');
+    
+    if (searchFieldSelect) {
+        // Populate field options
+        searchFieldSelect.innerHTML = '<option value="">All Fields</option>';
+        if (state.datasheetData && state.datasheetData.field_names) {
+            state.datasheetData.field_names.forEach(field => {
+                const option = document.createElement('option');
+                option.value = field;
+                option.textContent = field;
+                searchFieldSelect.appendChild(option);
+            });
+        }
+        
+        // Clone and replace to remove old listeners
+        const newSearchFieldSelect = searchFieldSelect.cloneNode(true);
+        searchFieldSelect.replaceWith(newSearchFieldSelect);
+        newSearchFieldSelect.addEventListener('change', performSearch);
+    }
+    
+    if (searchInput) {
+        const newSearchInput = searchInput.cloneNode(true);
+        searchInput.replaceWith(newSearchInput);
+        newSearchInput.addEventListener('input', performSearch);
+        newSearchInput.addEventListener('keydown', (e) => {
+            if (e.key === 'Enter') {
+                if (e.shiftKey) {
+                    navigateSearchResults(-1);
+                } else {
+                    navigateSearchResults(1);
+                }
+            }
+        });
+    }
+    
+    if (searchPrevBtn) {
+        const newSearchPrevBtn = searchPrevBtn.cloneNode(true);
+        searchPrevBtn.replaceWith(newSearchPrevBtn);
+        newSearchPrevBtn.addEventListener('click', () => navigateSearchResults(-1));
+    }
+    
+    if (searchNextBtn) {
+        const newSearchNextBtn = searchNextBtn.cloneNode(true);
+        searchNextBtn.replaceWith(newSearchNextBtn);
+        newSearchNextBtn.addEventListener('click', () => navigateSearchResults(1));
+    }
+}
+
+// Perform search in datasheet
+function performSearch() {
+    const searchInput = document.getElementById('search-input');
+    const searchFieldSelect = document.getElementById('search-field-select');
+    const searchResultsInfo = document.getElementById('search-results-info');
+    const searchPrevBtn = document.getElementById('btn-search-prev');
+    const searchNextBtn = document.getElementById('btn-search-next');
+    
+    const searchTerm = searchInput.value.trim().toLowerCase();
+    const searchField = searchFieldSelect.value;
+    
+    // Clear previous search highlighting
+    document.querySelectorAll('.search-highlight').forEach(el => {
+        el.classList.remove('search-highlight', 'search-current');
+    });
+    
+    state.searchResults = [];
+    state.searchCurrentIndex = -1;
+    
+    if (!searchTerm) {
+        searchResultsInfo.textContent = '';
+        searchPrevBtn.disabled = true;
+        searchNextBtn.disabled = true;
+        return;
+    }
+    
+    if (!state.datasheetData) return;
+    
+    // Search through records
+    const tbody = document.getElementById('datasheet-body');
+    const rows = tbody.querySelectorAll('tr');
+    
+    rows.forEach((row, rowIndex) => {
+        const cells = row.querySelectorAll('td');
+        
+        cells.forEach((cell, cellIndex) => {
+            const field = state.columnOrder[cellIndex];
+            
+            // Skip if searching specific field and this isn't it
+            if (searchField && field !== searchField) {
+                return;
+            }
+            
+            const cellText = cell.textContent.toLowerCase();
+            
+            if (cellText.includes(searchTerm)) {
+                state.searchResults.push({ row: rowIndex, cell: cellIndex, element: cell });
+                cell.classList.add('search-highlight');
+            }
+        });
+    });
+    
+    // Update UI
+    if (state.searchResults.length > 0) {
+        searchResultsInfo.textContent = `${state.searchResults.length} result${state.searchResults.length !== 1 ? 's' : ''}`;
+        searchPrevBtn.disabled = false;
+        searchNextBtn.disabled = false;
+        
+        // Navigate to first result
+        state.searchCurrentIndex = 0;
+        scrollToSearchResult(state.searchCurrentIndex);
+    } else {
+        searchResultsInfo.textContent = 'No results';
+        searchResultsInfo.style.color = '#dc2626';
+        setTimeout(() => {
+            searchResultsInfo.style.color = '#6b7280';
+        }, 2000);
+        searchPrevBtn.disabled = true;
+        searchNextBtn.disabled = true;
+    }
+}
+
+// Navigate through search results
+function navigateSearchResults(direction) {
+    if (state.searchResults.length === 0) return;
+    
+    // Remove current highlight
+    if (state.searchCurrentIndex >= 0 && state.searchCurrentIndex < state.searchResults.length) {
+        state.searchResults[state.searchCurrentIndex].element.classList.remove('search-current');
+    }
+    
+    // Update index with wrapping
+    state.searchCurrentIndex += direction;
+    if (state.searchCurrentIndex < 0) {
+        state.searchCurrentIndex = state.searchResults.length - 1;
+    } else if (state.searchCurrentIndex >= state.searchResults.length) {
+        state.searchCurrentIndex = 0;
+    }
+    
+    // Scroll to and highlight current result
+    scrollToSearchResult(state.searchCurrentIndex);
+    
+    // Update info
+    const searchResultsInfo = document.getElementById('search-results-info');
+    searchResultsInfo.textContent = `${state.searchCurrentIndex + 1} of ${state.searchResults.length}`;
+}
+
+// Scroll to specific search result
+function scrollToSearchResult(index) {
+    if (index < 0 || index >= state.searchResults.length) return;
+    
+    const result = state.searchResults[index];
+    const cell = result.element;
+    
+    // Highlight current result
+    cell.classList.add('search-current');
+    
+    // Scroll to row
+    const row = cell.closest('tr');
+    if (row) {
+        row.scrollIntoView({ behavior: 'smooth', block: 'center' });
+    }
+    
+    // Scroll to column (horizontal scroll)
+    const container = document.getElementById('datasheet-container');
+    if (container && cell) {
+        const cellRect = cell.getBoundingClientRect();
+        const containerRect = container.getBoundingClientRect();
+        
+        // Check if cell is outside visible area
+        if (cellRect.left < containerRect.left || cellRect.right > containerRect.right) {
+            // Scroll horizontally to bring cell into view
+            const scrollLeft = cell.offsetLeft - container.offsetLeft - (containerRect.width / 2) + (cellRect.width / 2);
+            container.scrollTo({ left: scrollLeft, behavior: 'smooth' });
+        }
     }
 }
 
@@ -1928,13 +2542,43 @@ function renderOrphanedFiles() {
     if (!state.datasheetData) return;
     
     const list = document.getElementById('orphaned-files-list');
+    const savedList = document.getElementById('saved-files-list');
+    const noLongerNeededList = document.getElementById('no-longer-needed-list');
     const countBadge = document.getElementById('orphaned-count');
+    const savedCountBadge = document.getElementById('saved-count');
+    const noLongerNeededCountBadge = document.getElementById('no-longer-needed-count');
     
     list.innerHTML = '';
+    savedList.innerHTML = '';
+    noLongerNeededList.innerHTML = '';
     
     let orphanedCount = 0;
+    let savedCount = 0;
+    let noLongerNeededCount = 0;
     
     state.datasheetData.orphaned_files.forEach(filename => {
+        // Check if this file's suffix is excluded
+        const fileSuffix = getFileSuffix(filename);
+        if (fileSuffix !== null && state.excludedSuffixes.has(fileSuffix)) {
+            return; // Skip excluded suffix files
+        }
+        
+        // Skip if saved for later
+        if (state.savedForLater.has(filename)) {
+            savedCount++;
+            const item = createOrphanedFileItem(filename, 'saved');
+            savedList.appendChild(item);
+            return;
+        }
+        
+        // Skip if no longer needed
+        if (state.noLongerNeeded.has(filename)) {
+            noLongerNeededCount++;
+            const item = createOrphanedFileItem(filename, 'noLongerNeeded');
+            noLongerNeededList.appendChild(item);
+            return;
+        }
+        
         const item = document.createElement('div');
         item.className = 'orphaned-file-item';
         item.draggable = true;
@@ -1965,11 +2609,16 @@ function renderOrphanedFiles() {
             item.classList.remove('dragging');
         });
         
-        // Click to show details if tentative
+        // Right-click context menu
+        item.addEventListener('contextmenu', (e) => {
+            e.preventDefault();
+            showOrphanContextMenu(e, filename, false);
+        });
+        
+        // Click to show details if tentative, else play audio
         if (tentative) {
             item.addEventListener('click', () => showTentativeDetails(filename, tentative));
         } else {
-            // Click to play audio
             item.addEventListener('click', () => {
                 if (state.autoPlayAudio) {
                     playAudioFile(filename);
@@ -1980,17 +2629,30 @@ function renderOrphanedFiles() {
         list.appendChild(item);
     });
     
-    // Add files that will be unlinked (they become orphaned)
+    // Add files that will be unlinked (they become orphaned and can be reassigned)
     for (const originalFile in state.tentativeUnlinks) {
         const unlink = state.tentativeUnlinks[originalFile];
         const item = document.createElement('div');
         item.className = 'orphaned-file-item tentative';
+        item.draggable = true;  // Make draggable so it can be reassigned
+        item.dataset.filename = originalFile;  // Use original filename for drag
         item.style.borderLeft = '3px solid #dc2626';
         item.innerHTML = `
             <div class="new-name">${unlink.unlinkTo} <small>(will be unlinked)</small></div>
             <div class="old-name">${originalFile}</div>
         `;
-        item.title = `${originalFile} → ${unlink.unlinkTo} (unlinked)`;
+        item.title = `${originalFile} → ${unlink.unlinkTo} (unlinked) - Drag to reassign`;
+        
+        // Drag events to allow reassignment
+        item.addEventListener('dragstart', (e) => {
+            e.dataTransfer.effectAllowed = 'move';
+            e.dataTransfer.setData('text/plain', originalFile);
+            item.classList.add('dragging');
+        });
+        
+        item.addEventListener('dragend', (e) => {
+            item.classList.remove('dragging');
+        });
         
         item.addEventListener('click', () => showUnlinkDetails(originalFile, unlink));
         
@@ -1998,6 +2660,159 @@ function renderOrphanedFiles() {
     }
     
     countBadge.textContent = orphanedCount;
+    savedCountBadge.textContent = savedCount;
+    noLongerNeededCountBadge.textContent = noLongerNeededCount;
+}
+
+// Helper function to get the suffix of a filename based on extracted suffixes
+function getFileSuffix(filename) {
+    if (!state.suffixes) return null;
+    
+    // Check each suffix to see if this file has it
+    for (const suffix in state.suffixes) {
+        if (state.suffixes[suffix].includes(filename)) {
+            return suffix;
+        }
+    }
+    
+    return null;
+}
+
+// Helper function to create orphaned file item (used for saved list too)
+function createOrphanedFileItem(filename, category) {
+    const item = document.createElement('div');
+    item.className = 'orphaned-file-item';
+    item.draggable = category !== 'noLongerNeeded';  // No longer needed files can't be dragged
+    item.dataset.filename = filename;
+    item.textContent = filename;
+    
+    // Drag events
+    item.addEventListener('dragstart', (e) => {
+        e.dataTransfer.effectAllowed = 'move';
+        e.dataTransfer.setData('text/plain', filename);
+        item.classList.add('dragging');
+    });
+    
+    item.addEventListener('dragend', (e) => {
+        item.classList.remove('dragging');
+    });
+    
+    // Right-click context menu
+    item.addEventListener('contextmenu', (e) => {
+        e.preventDefault();
+        showOrphanContextMenu(e, filename, category);
+    });
+    
+    // Click to play audio
+    item.addEventListener('click', () => {
+        if (state.autoPlayAudio) {
+            playAudioFile(filename);
+        }
+    });
+    
+    return item;
+}
+
+// Show context menu for orphaned files
+function showOrphanContextMenu(e, filename, category) {
+    // Remove any existing context menu
+    const existing = document.querySelector('.context-menu');
+    if (existing) existing.remove();
+    
+    const menu = document.createElement('div');
+    menu.className = 'context-menu';
+    menu.style.position = 'fixed';
+    menu.style.left = e.clientX + 'px';
+    menu.style.top = e.clientY + 'px';
+    menu.style.background = 'white';
+    menu.style.border = '1px solid #d1d5db';
+    menu.style.borderRadius = '4px';
+    menu.style.boxShadow = '0 4px 6px -1px rgba(0, 0, 0, 0.1)';
+    menu.style.zIndex = '10000';
+    menu.style.minWidth = '180px';
+    
+    const playOption = document.createElement('div');
+    playOption.className = 'context-menu-item';
+    playOption.textContent = '▶ Play';
+    playOption.style.padding = '0.5rem 1rem';
+    playOption.style.cursor = 'pointer';
+    playOption.addEventListener('click', () => {
+        playAudioFile(filename);
+        menu.remove();
+    });
+    playOption.addEventListener('mouseenter', () => playOption.style.background = '#f3f4f6');
+    playOption.addEventListener('mouseleave', () => playOption.style.background = 'white');
+    
+    // Save for Later option
+    const saveOption = document.createElement('div');
+    saveOption.className = 'context-menu-item';
+    saveOption.style.padding = '0.5rem 1rem';
+    saveOption.style.cursor = 'pointer';
+    
+    if (category === 'saved') {
+        saveOption.textContent = '↩ Return to Unmatched';
+        saveOption.addEventListener('click', () => {
+            state.savedForLater.delete(filename);
+            saveStep3Progress();
+            renderOrphanedFiles();
+            menu.remove();
+        });
+    } else if (category === 'noLongerNeeded') {
+        saveOption.textContent = '↩ Return to Unmatched';
+        saveOption.addEventListener('click', () => {
+            state.noLongerNeeded.delete(filename);
+            saveStep3Progress();
+            renderOrphanedFiles();
+            menu.remove();
+        });
+    } else {
+        saveOption.textContent = '💾 Save for Later';
+        saveOption.addEventListener('click', () => {
+            state.savedForLater.add(filename);
+            saveStep3Progress();
+            renderOrphanedFiles();
+            menu.remove();
+        });
+    }
+    saveOption.addEventListener('mouseenter', () => saveOption.style.background = '#f3f4f6');
+    saveOption.addEventListener('mouseleave', () => saveOption.style.background = 'white');
+    
+    // No Longer Needed option (only show for unmatched and saved files)
+    if (category !== 'noLongerNeeded') {
+        const noLongerNeededOption = document.createElement('div');
+        noLongerNeededOption.className = 'context-menu-item';
+        noLongerNeededOption.textContent = '🗑️ No Longer Needed';
+        noLongerNeededOption.style.padding = '0.5rem 1rem';
+        noLongerNeededOption.style.cursor = 'pointer';
+        noLongerNeededOption.addEventListener('click', () => {
+            // Remove from saved if it's there
+            state.savedForLater.delete(filename);
+            // Add to no longer needed
+            state.noLongerNeeded.add(filename);
+            saveStep3Progress();
+            renderOrphanedFiles();
+            menu.remove();
+        });
+        noLongerNeededOption.addEventListener('mouseenter', () => noLongerNeededOption.style.background = '#f3f4f6');
+        noLongerNeededOption.addEventListener('mouseleave', () => noLongerNeededOption.style.background = 'white');
+        
+        menu.appendChild(playOption);
+        menu.appendChild(saveOption);
+        menu.appendChild(noLongerNeededOption);
+    } else {
+        menu.appendChild(playOption);
+        menu.appendChild(saveOption);
+    }
+    
+    document.body.appendChild(menu);
+    
+    // Close menu when clicking elsewhere
+    setTimeout(() => {
+        document.addEventListener('click', function closeMenu() {
+            menu.remove();
+            document.removeEventListener('click', closeMenu);
+        });
+    }, 100);
 }
 
 // Handle drag over cell
@@ -2019,6 +2834,12 @@ async function handleDrop(e, recordIdx, field) {
     
     const orphanFile = e.dataTransfer.getData('text/plain');
     if (!orphanFile) return;
+    
+    // If this file is marked for unlink, cancel the unlink (we're reassigning it)
+    if (state.tentativeUnlinks[orphanFile]) {
+        delete state.tentativeUnlinks[orphanFile];
+        showSuccess(`Cancelled unlink for ${orphanFile} - reassigning to new location`);
+    }
     
     // Get record
     const record = state.datasheetData.records[recordIdx];
@@ -2045,13 +2866,26 @@ async function handleDrop(e, recordIdx, field) {
     }
     
     if (suffixesForField.length === 0) {
-        showError('No suffix mapping for this field');
-        return;
-    }
-    
-    // If multiple suffixes, show picker
-    let selectedSuffix;
-    if (suffixesForField.length === 1) {
+        // No suffix mapping exists for this field - offer to create one
+        const shouldCreate = await showCreateSuffixMappingDialog(orphanFile, field);
+        if (!shouldCreate) return;
+        
+        selectedSuffix = shouldCreate.suffix;
+        
+        // Add the new mapping
+        if (!state.suffixMappings[selectedSuffix]) {
+            state.suffixMappings[selectedSuffix] = [];
+        }
+        state.suffixMappings[selectedSuffix].push(field);
+        
+        // Save mappings
+        try {
+            await window.pywebview.api.save_suffix_mappings(state.suffixMappings);
+        } catch (error) {
+            showError('Error saving suffix mapping: ' + error.message);
+            return;
+        }
+    } else if (suffixesForField.length === 1) {
         selectedSuffix = suffixesForField[0];
     } else {
         selectedSuffix = await showSuffixPicker(suffixesForField, field);
@@ -2071,6 +2905,9 @@ async function handleDrop(e, recordIdx, field) {
         newName: newName,
         oldName: orphanFile
     };
+    
+    // Save progress
+    await saveStep3Progress();
     
     // Refresh UI
     buildDataSheet();
@@ -2101,7 +2938,7 @@ function showSuffixPicker(suffixes, field) {
         suffixes.forEach(suffix => {
             const btn = document.createElement('button');
             btn.className = 'btn-primary';
-            btn.textContent = suffix === '' ? '(no suffix - whole record)' : suffix;
+            btn.textContent = suffix === '' ? '(no suffix - SoundFile)' : suffix;
             btn.addEventListener('click', () => {
                 modal.remove();
                 resolve(suffix);
@@ -2110,6 +2947,117 @@ function showSuffixPicker(suffixes, field) {
         });
         
         modal.querySelector('#btn-cancel-suffix').addEventListener('click', () => {
+            modal.remove();
+            resolve(null);
+        });
+    });
+}
+
+// Show dialog to create new suffix mapping
+function showCreateSuffixMappingDialog(orphanFile, field) {
+    return new Promise((resolve) => {
+        const modal = document.createElement('div');
+        modal.className = 'modal';
+        
+        // Extract suffix from orphan filename
+        const record = state.datasheetData.records.find(r => orphanFile.startsWith(r.SoundFile.split('.')[0]));
+        const suggestedSuffix = record ? orphanFile.replace(record.SoundFile.split('.')[0], '').replace(/\.(wav|WAV)$/i, '') : '';
+        
+        modal.innerHTML = `
+            <div class="modal-content" style="max-width: 500px;">
+                <h3>⚠️ Create New Suffix Mapping</h3>
+                <p style="color: #dc2626; font-weight: 600; margin: 1rem 0;">
+                    WARNING: The field <strong>"${field}"</strong> does not currently have any suffix mappings.
+                </p>
+                <p style="margin: 1rem 0;">
+                    File: <strong>${orphanFile}</strong><br>
+                    You are about to create a new suffix mapping for this field.
+                </p>
+                <div style="margin: 1rem 0;">
+                    <label style="display: block; margin-bottom: 0.5rem; font-weight: 600;">
+                        Enter suffix (including any dashes, underscores, etc.):
+                    </label>
+                    <input type="text" id="new-suffix-input" value="${suggestedSuffix}" 
+                           style="width: 100%; padding: 0.5rem; border: 1px solid #d1d5db; border-radius: 4px;"
+                           placeholder="e.g., -phon or _alt">
+                </div>
+                <div id="suffix-warning" style="display: none; padding: 1rem; background: #fef3c7; border-left: 4px solid #f59e0b; margin: 1rem 0;">
+                </div>
+                <div class="button-row">
+                    <button id="btn-create-mapping" class="btn-primary">Create Mapping</button>
+                    <button id="btn-cancel-mapping" class="btn-secondary">Cancel</button>
+                </div>
+            </div>
+        `;
+        
+        document.body.appendChild(modal);
+        
+        const input = modal.querySelector('#new-suffix-input');
+        const warningDiv = modal.querySelector('#suffix-warning');
+        const createBtn = modal.querySelector('#btn-create-mapping');
+        
+        // Check for existing suffix mappings
+        function checkSuffix() {
+            const suffix = input.value.trim();
+            
+            if (suffix === '') {
+                warningDiv.style.display = 'none';
+                return;
+            }
+            
+            if (state.suffixMappings[suffix]) {
+                const existingFields = state.suffixMappings[suffix];
+                warningDiv.style.display = 'block';
+                warningDiv.innerHTML = `
+                    <strong>⚠️ WARNING:</strong> This suffix is already mapped to: 
+                    <strong>${existingFields.join(', ')}</strong>
+                    <br><br>
+                    If you continue, this suffix will associate sound files with <strong>BOTH</strong> 
+                    "${field}" AND "${existingFields.join('", "')}" in all records.
+                    <br><br>
+                    <strong>Are you absolutely sure you want to do this?</strong>
+                `;
+            } else {
+                warningDiv.style.display = 'none';
+            }
+        }
+        
+        input.addEventListener('input', checkSuffix);
+        input.addEventListener('focus', () => input.select());
+        checkSuffix();
+        
+        // Focus input
+        setTimeout(() => input.focus(), 100);
+        
+        createBtn.addEventListener('click', () => {
+            const suffix = input.value.trim();
+            
+            if (!suffix && suffix !== '') {
+                showError('Please enter a suffix');
+                return;
+            }
+            
+            // Final confirmation if suffix already exists
+            if (state.suffixMappings[suffix]) {
+                const confirmed = confirm(
+                    `⚠️ FINAL WARNING ⚠️\n\n` +
+                    `The suffix "${suffix}" is already mapped to: ${state.suffixMappings[suffix].join(', ')}\n\n` +
+                    `This means sound files with this suffix will associate with MULTIPLE fields:\n` +
+                    `- ${state.suffixMappings[suffix].join('\n- ')}\n` +
+                    `- ${field}\n\n` +
+                    `Do you understand and want to proceed?`
+                );
+                
+                if (!confirmed) {
+                    return;
+                }
+            }
+            
+            modal.remove();
+            resolve({ suffix });
+        });
+        
+        modal.querySelector('#btn-cancel-mapping').addEventListener('click', () => {
             modal.remove();
             resolve(null);
         });
@@ -2208,6 +3156,9 @@ function showCellModal(e, recordIdx, field, cellStatus) {
 window.removeTentative = function(orphanFile) {
     delete state.tentativeAssociations[orphanFile];
     
+    // Save progress
+    saveStep3Progress();
+    
     // Close modal
     if (state.activeModal) {
         state.activeModal.remove();
@@ -2251,6 +3202,7 @@ function showTentativeDetails(filename, tentative) {
     
     modal.querySelector('#btn-remove-tentative').addEventListener('click', () => {
         delete state.tentativeAssociations[filename];
+        saveStep3Progress();
         modal.remove();
         buildDataSheet();
         renderOrphanedFiles();
@@ -2294,6 +3246,7 @@ function showUnlinkDetails(filename, unlink) {
     
     modal.querySelector('#btn-cancel-unlink').addEventListener('click', () => {
         delete state.tentativeUnlinks[filename];
+        saveStep3Progress();
         modal.remove();
         buildDataSheet();
         renderOrphanedFiles();
@@ -2322,9 +3275,190 @@ function clearAllTentative() {
     if (confirm(`Clear all tentative changes? (${message.join(' and ')})`)) {
         state.tentativeAssociations = {};
         state.tentativeUnlinks = {};
+        saveStep3Progress();
         buildDataSheet();
         renderOrphanedFiles();
         showSuccess('Cleared all tentative changes');
+    }
+}
+
+// Save Step 3 progress to backend
+async function saveStep3Progress() {
+    if (!state.datasheetData) return;
+    
+    const progress = {
+        version: '1.0',
+        timestamp: new Date().toISOString(),
+        xmlPath: state.xmlPath,
+        audioFolder: state.audioFolder,
+        tentativeAssociations: state.tentativeAssociations,
+        tentativeUnlinks: state.tentativeUnlinks,
+        savedForLater: Array.from(state.savedForLater),
+        noLongerNeeded: Array.from(state.noLongerNeeded)
+    };
+    
+    try {
+        const result = await window.pywebview.api.save_step3_progress(progress);
+        if (!result.success) {
+            console.error('Failed to save progress:', result.error);
+        }
+    } catch (error) {
+        console.error('Error saving progress:', error);
+    }
+}
+
+// Load Step 3 progress from backend
+async function loadStep3Progress() {
+    try {
+        const result = await window.pywebview.api.load_step3_progress();
+        if (!result.success || !result.progress) {
+            return;
+        }
+        
+        const progress = result.progress;
+        
+        // Validate progress matches current XML/audio
+        if (progress.xmlPath !== state.xmlPath || progress.audioFolder !== state.audioFolder) {
+            console.warn('Progress is from different XML/audio folder, not loading');
+            return;
+        }
+        
+        // Restore state
+        state.tentativeAssociations = progress.tentativeAssociations || {};
+        state.tentativeUnlinks = progress.tentativeUnlinks || {};
+        state.savedForLater = new Set(progress.savedForLater || []);
+        state.noLongerNeeded = new Set(progress.noLongerNeeded || []);
+        
+        // Refresh UI
+        buildDataSheet();
+        renderOrphanedFiles();
+        
+        const totalChanges = Object.keys(state.tentativeAssociations).length + 
+                            Object.keys(state.tentativeUnlinks).length;
+        if (totalChanges > 0) {
+            showInfo(`Loaded ${totalChanges} tentative change(s) from previous session`);
+        }
+    } catch (error) {
+        console.error('Error loading progress:', error);
+    }
+}
+
+// Export progress to JSON file
+async function exportProgress() {
+    if (!state.datasheetData) {
+        showError('No datasheet loaded');
+        return;
+    }
+    
+    const progress = {
+        version: '1.0',
+        timestamp: new Date().toISOString(),
+        xmlPath: state.xmlPath,
+        audioFolder: state.audioFolder,
+        tentativeAssociations: state.tentativeAssociations,
+        tentativeUnlinks: state.tentativeUnlinks,
+        savedForLater: Array.from(state.savedForLater),
+        noLongerNeeded: Array.from(state.noLongerNeeded)
+    };
+    
+    try {
+        const result = await window.pywebview.api.export_step3_progress(progress);
+        if (result.success) {
+            showSuccess(`Progress exported to ${result.path}`);
+        } else {
+            showError(result.error || 'Failed to export progress');
+        }
+    } catch (error) {
+        showError(`Error exporting progress: ${error.message}`);
+    }
+}
+
+// Import progress from JSON file
+async function importProgress() {
+    if (!state.datasheetData) {
+        showError('Load a datasheet first');
+        return;
+    }
+    
+    try {
+        const result = await window.pywebview.api.import_step3_progress();
+        if (!result.success) {
+            if (result.error !== 'No file selected') {
+                showError(result.error || 'Failed to import progress');
+            }
+            return;
+        }
+        
+        const progress = result.progress;
+        
+        // Validate version
+        if (progress.version !== '1.0') {
+            showError('Unsupported progress file version');
+            return;
+        }
+        
+        // Warn if XML/audio paths don't match
+        if (progress.xmlPath !== state.xmlPath || progress.audioFolder !== state.audioFolder) {
+            if (!confirm('Warning: This progress file is from a different XML or audio folder. Import anyway?')) {
+                return;
+            }
+        }
+        
+        // Restore state
+        state.tentativeAssociations = progress.tentativeAssociations || {};
+        state.tentativeUnlinks = progress.tentativeUnlinks || {};
+        state.savedForLater = new Set(progress.savedForLater || []);
+        state.noLongerNeeded = new Set(progress.noLongerNeeded || []);
+        
+        // Save to settings
+        await saveStep3Progress();
+        
+        // Refresh UI
+        buildDataSheet();
+        renderOrphanedFiles();
+        
+        const totalChanges = Object.keys(state.tentativeAssociations).length + 
+                            Object.keys(state.tentativeUnlinks).length;
+        showSuccess(`Imported ${totalChanges} tentative change(s)`);
+    } catch (error) {
+        showError(`Error importing progress: ${error.message}`);
+    }
+}
+
+// Reset all Step 3 progress
+async function resetProgress() {
+    if (!state.datasheetData) {
+        showError('No datasheet loaded');
+        return;
+    }
+    
+    const hasAssociations = Object.keys(state.tentativeAssociations).length > 0;
+    const hasUnlinks = Object.keys(state.tentativeUnlinks).length > 0;
+    const hasSaved = state.savedForLater.size > 0;
+    const hasNoLongerNeeded = state.noLongerNeeded.size > 0;
+    
+    if (!hasAssociations && !hasUnlinks && !hasSaved && !hasNoLongerNeeded) {
+        showError('No progress to reset');
+        return;
+    }
+    
+    const message = [];
+    if (hasAssociations) message.push(`${Object.keys(state.tentativeAssociations).length} association(s)`);
+    if (hasUnlinks) message.push(`${Object.keys(state.tentativeUnlinks).length} unlink(s)`);
+    if (hasSaved) message.push(`${state.savedForLater.size} saved file(s)`);
+    if (hasNoLongerNeeded) message.push(`${state.noLongerNeeded.size} no longer needed file(s)`);
+    
+    if (confirm(`Reset all progress? This will clear: ${message.join(', ')}. This cannot be undone.`)) {
+        state.tentativeAssociations = {};
+        state.tentativeUnlinks = {};
+        state.savedForLater = new Set();
+        state.noLongerNeeded = new Set();
+        
+        await saveStep3Progress();
+        
+        buildDataSheet();
+        renderOrphanedFiles();
+        showSuccess('Progress reset');
     }
 }
 
@@ -2337,7 +3471,7 @@ function showColumnSettings() {
     modal.innerHTML = `
         <div class="modal-content" style="max-width: 600px;">
             <h3>Column Settings</h3>
-            <p>Show, hide, and reorder columns</p>
+            <p>Show, hide, and reorder columns. Reference is always visible and first.</p>
             <div id="column-list" style="margin: 1rem 0;"></div>
             <div class="button-row">
                 <button id="btn-save-columns" class="btn-primary">Save</button>
@@ -2349,17 +3483,97 @@ function showColumnSettings() {
     document.body.appendChild(modal);
     
     const columnList = modal.querySelector('#column-list');
+    
+    // Build ordered list from current columnOrder, ensuring all fields are included
+    const orderedFields = [...state.columnOrder];
     state.datasheetData.field_names.forEach(field => {
+        if (!orderedFields.includes(field)) {
+            orderedFields.push(field);
+        }
+    });
+    
+    orderedFields.forEach((field, idx) => {
         const div = document.createElement('div');
-        div.style.cssText = 'padding: 0.5rem; border: 1px solid #e5e7eb; margin-bottom: 0.25rem; display: flex; align-items: center; gap: 0.5rem;';
+        div.className = 'column-setting-row';
+        div.style.cssText = 'padding: 0.5rem; border: 1px solid #e5e7eb; margin-bottom: 0.25rem; display: flex; align-items: center; gap: 0.5rem; background: white; cursor: move;';
+        div.dataset.field = field;
         
+        // Make rows draggable (except Reference)
+        if (field !== 'Reference') {
+            div.draggable = true;
+            
+            div.addEventListener('dragstart', (e) => {
+                div.style.opacity = '0.5';
+                e.dataTransfer.effectAllowed = 'move';
+                e.dataTransfer.setData('text/plain', field);
+            });
+            
+            div.addEventListener('dragend', (e) => {
+                div.style.opacity = '1';
+            });
+            
+            div.addEventListener('dragover', (e) => {
+                e.preventDefault();
+                e.dataTransfer.dropEffect = 'move';
+                
+                // Don't allow dropping above Reference
+                const rows = Array.from(columnList.querySelectorAll('.column-setting-row'));
+                const targetIdx = rows.indexOf(div);
+                if (targetIdx > 0) {
+                    div.style.borderTop = '2px solid #3b82f6';
+                }
+            });
+            
+            div.addEventListener('dragleave', (e) => {
+                div.style.borderTop = '1px solid #e5e7eb';
+            });
+            
+            div.addEventListener('drop', (e) => {
+                e.preventDefault();
+                div.style.borderTop = '1px solid #e5e7eb';
+                
+                const draggedField = e.dataTransfer.getData('text/plain');
+                const draggedRow = columnList.querySelector(`[data-field="${draggedField}"]`);
+                
+                if (draggedRow && draggedRow !== div) {
+                    const rows = Array.from(columnList.querySelectorAll('.column-setting-row'));
+                    const draggedIdx = rows.indexOf(draggedRow);
+                    const targetIdx = rows.indexOf(div);
+                    
+                    // Don't allow dropping above Reference
+                    if (targetIdx > 0) {
+                        if (draggedIdx < targetIdx) {
+                            columnList.insertBefore(draggedRow, div.nextSibling);
+                        } else {
+                            columnList.insertBefore(draggedRow, div);
+                        }
+                    }
+                }
+            });
+            
+            // Drag handle icon
+            const dragHandle = document.createElement('span');
+            dragHandle.textContent = '☰';
+            dragHandle.style.cssText = 'color: #9ca3af; cursor: move;';
+            div.appendChild(dragHandle);
+        } else {
+            // Reference row not draggable
+            div.style.cursor = 'default';
+            const spacer = document.createElement('div');
+            spacer.style.width = '20px';
+            div.appendChild(spacer);
+        }
+        
+        // Visibility checkbox
         const checkbox = document.createElement('input');
         checkbox.type = 'checkbox';
         checkbox.checked = state.visibleColumns.includes(field);
-        checkbox.disabled = field === 'Reference';  // Can't hide Reference
+        checkbox.disabled = field === 'Reference';  // Reference always visible
+        checkbox.style.cursor = field === 'Reference' ? 'default' : 'pointer';
         
         const label = document.createElement('span');
         label.textContent = field;
+        label.style.flex = '1';
         
         div.appendChild(checkbox);
         div.appendChild(label);
@@ -2367,21 +3581,26 @@ function showColumnSettings() {
     });
     
     modal.querySelector('#btn-save-columns').addEventListener('click', async () => {
-        const checkboxes = columnList.querySelectorAll('input[type="checkbox"]');
-        state.visibleColumns = [];
-        state.columnOrder = [];
+        const rows = columnList.querySelectorAll('.column-setting-row');
+        const newColumnOrder = [];
+        const newVisibleColumns = [];
         
-        checkboxes.forEach((cb, idx) => {
-            if (cb.checked) {
-                const field = state.datasheetData.field_names[idx];
-                state.visibleColumns.push(field);
-                state.columnOrder.push(field);
+        rows.forEach((row) => {
+            const field = row.dataset.field;
+            newColumnOrder.push(field);
+            const checkbox = row.querySelector('input[type="checkbox"]');
+            if (checkbox && checkbox.checked) {
+                newVisibleColumns.push(field);
             }
         });
         
+        // Update state with new order
+        state.columnOrder = newColumnOrder;
+        state.visibleColumns = newVisibleColumns;
+        
         // Save to backend
         try {
-            await window.pywebview.api.save_datasheet_settings(state.filters, state.visibleColumns);
+            await window.pywebview.api.save_datasheet_settings(state.filters, state.visibleColumns, state.columnOrder);
         } catch (error) {
             console.error('Error saving column settings:', error);
         }
@@ -2521,11 +3740,14 @@ function createFilterRow(prefill) {
     
     const nameSel = document.createElement('select');
     nameSel.className = 'filter-name';
-    const fieldNames = ['Reference'];
-    const mapped = new Set();
-    for (const suffix in state.suffixMappings) state.suffixMappings[suffix].forEach(f => mapped.add(f));
-    Array.from(mapped).sort().forEach(n => fieldNames.push(n));
+    
+    // Get ALL fields from datasheet, not just mapped ones
+    const fieldNames = state.datasheetData && state.datasheetData.field_names ? 
+        [...state.datasheetData.field_names] : 
+        ['Reference'];
+    
     const groupNames = Object.keys(state.fieldGroups || {});
+    
     function populateNames() {
         nameSel.innerHTML = '';
         const list = targetSel.value === 'group' ? groupNames : fieldNames;
@@ -2585,6 +3807,9 @@ async function acceptSuggestions() {
             oldName: suggestion.orphan
         };
     });
+    
+    // Save progress
+    await saveStep3Progress();
     
     // Hide suggested section
     document.getElementById('step3-suggested').classList.add('hidden');
@@ -2739,6 +3964,9 @@ window.unlinkExistingFile = async function(filename, recordIdx, field, suffix) {
             unlinkTo: unlinkedName,
             originalName: filename
         };
+        
+        // Save progress
+        saveStep3Progress();
         
         modal.remove();
         buildDataSheet();

@@ -97,6 +97,10 @@
                 </div>
 
                 <div class="button-row">
+                    <button id="btn-inspect-suffixes" class="btn-secondary" disabled>🔍 Inspect Suffixes & Rename Files</button>
+                </div>
+                
+                <div class="button-row">
                     <button id="btn-load-dekereke-settings" class="btn-secondary">Read from Dekereke Settings File</button>
                     <button id="btn-import-mappings" class="btn-secondary">Import from Text File</button>
                     <button id="btn-export-mappings" class="btn-secondary">Export to Text File</button>
@@ -166,6 +170,19 @@
                         <button id="btn-column-settings" class="btn-secondary">Column Settings</button>
                         <button id="btn-toggle-filters" class="btn-secondary">Toggle Filters</button>
                         <button id="btn-clear-tentative" class="btn-secondary">Clear All Tentative</button>
+                        
+                        <div style="display: inline-flex; align-items: center; gap: 0.5rem; margin-left: 1rem;">
+                            <label style="font-weight: 500;">Search:</label>
+                            <select id="search-field-select" style="padding: 0.25rem 0.5rem; border: 1px solid #d1d5db; border-radius: 4px;">
+                                <option value="">All Fields</option>
+                            </select>
+                            <input type="text" id="search-input" placeholder="Search..." 
+                                   style="padding: 0.25rem 0.5rem; border: 1px solid #d1d5db; border-radius: 4px; width: 150px;">
+                            <button id="btn-search-prev" class="btn-small btn-secondary" disabled title="Previous result">&lt;</button>
+                            <button id="btn-search-next" class="btn-small btn-secondary" disabled title="Next result">&gt;</button>
+                            <span id="search-results-info" style="font-size: 0.85rem; color: #6b7280;"></span>
+                        </div>
+                        
                         <label style="display: inline-flex; align-items: center; gap: 0.5rem; margin-left: auto;">
                             <input type="checkbox" id="chk-auto-play" checked>
                             <span>Auto-play audio on click</span>
@@ -183,10 +200,16 @@
                             </div>
                         </div>
                         
-                        <!-- Orphaned Files Pane -->
+                        <!-- Unmatched Files Pane -->
                         <div class="orphaned-pane">
-                            <h4>Orphaned Files <span id="orphaned-count" class="count-badge">0</span></h4>
+                            <h4>Unmatched Files <span id="orphaned-count" class="count-badge">0</span></h4>
                             <div id="orphaned-files-list" class="orphaned-list"></div>
+                            
+                            <h4 style="margin-top: 1rem;">Saved for Later <span id="saved-count" class="count-badge">0</span></h4>
+                            <div id="saved-files-list" class="orphaned-list" style="opacity: 0.7;"></div>
+                            
+                            <h4 style="margin-top: 1rem;">No Longer Needed <span id="no-longer-needed-count" class="count-badge">0</span></h4>
+                            <div id="no-longer-needed-list" class="orphaned-list" style="opacity: 0.5;"></div>
                         </div>
                     </div>
                     
